@@ -78,12 +78,21 @@ Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 - **Discord user token** (for monitoring deal channels)
 - **Discord bot token** (optional, for DM push notifications)
 
-## Installation
+## Quick Start (Windows)
+
+1. Install [Python 3.10+](https://www.python.org/downloads/) — **check "Add Python to PATH"** during installation
+2. Download this repo (Code → Download ZIP) and extract it, or `git clone https://github.com/wsnich/stone-of-osgiliath.git`
+3. Double-click **`setup.bat`** — installs all dependencies automatically
+4. Edit `config.json` to add your Discord token (see Discord Setup below)
+5. Double-click **`start.bat`** to run the app
+6. Open **http://localhost:8888** in your browser
+
+## Installation (Manual / Mac / Linux)
 
 ```bash
 # Clone the repository
-git clone <repo-url>
-cd mtg-monitor
+git clone https://github.com/wsnich/stone-of-osgiliath.git
+cd stone-of-osgiliath
 
 # Install Python dependencies
 pip install -r requirements.txt

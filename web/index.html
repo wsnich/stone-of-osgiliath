@@ -1634,6 +1634,13 @@ select.form-input option { background: var(--surface2); }
         <input type="checkbox" id="set-headless" checked> Headless mode (no visible browser)
       </label>
 
+      <!-- Graded -->
+      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Graded</div>
+      <div>
+        <label class="form-label">Check Interval (hours) <span style="color:var(--muted);font-weight:400">default 168 = 7 days</span></label>
+        <input type="number" class="form-input" id="set-graded-interval" min="1" max="720" value="168" style="width:100px">
+      </div>
+
       <!-- Reddit -->
       <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Reddit</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -2329,6 +2336,7 @@ function connectWS() {
         break;
       case 'discord_post':
         prependDiscordPost(msg.data);
+        if (_activeTab === 'intelligence') loadOverview();
         break;
       case 'reddit_post':
         prependRedditPost(msg.data);
@@ -2902,6 +2910,7 @@ async function openSettingsModal() {
   document.getElementById('set-schedule-start').value = data.schedule_start || '07:00';
   document.getElementById('set-schedule-end').value = data.schedule_end || '23:00';
   document.getElementById('set-data-dir').value = data.data_dir || '';
+  document.getElementById('set-graded-interval').value = data.graded_interval_hours || 168;
   document.getElementById('set-reddit-subs').value = (data.reddit_subreddits || []).join(', ');
   document.getElementById('set-reddit-poll').value = data.reddit_poll_interval || 60;
   document.getElementById('set-user-token').value = data.user_token || '';
@@ -2945,6 +2954,7 @@ async function saveSettingsModal() {
     schedule_start: document.getElementById('set-schedule-start').value,
     schedule_end: document.getElementById('set-schedule-end').value,
     data_dir: document.getElementById('set-data-dir').value.trim(),
+    graded_interval_hours: parseInt(document.getElementById('set-graded-interval').value) || 168,
     reddit_subreddits: document.getElementById('set-reddit-subs').value.trim(),
     reddit_poll_interval: parseInt(document.getElementById('set-reddit-poll').value) || 60,
     user_token: document.getElementById('set-user-token').value.trim(),
@@ -6085,6 +6095,21 @@ async function loadDiscordKeywords() {
     html += '</div>';
   }
 
+  // Blocked retailers
+  const blocked = data.blocked_retailers || [];
+  html += `<div style="width:100%;margin-top:6px;padding-top:6px;border-top:1px solid var(--border)">
+    <div style="font-size:9px;color:var(--red);margin-bottom:3px">BLOCKED RETAILERS:</div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px">`;
+  html += blocked.map(r =>
+    `<span style="display:inline-flex;align-items:center;gap:3px;background:#2a1020;border:1px solid #3a2030;border-radius:4px;padding:2px 6px;font-size:10px;color:var(--red)"><b>${esc(r)}</b><span style="cursor:pointer;color:var(--green);font-size:11px" onclick="removeBlockedRetailer('${esc(r)}')" title="Unblock">↩</span></span>`
+  ).join('');
+  html += `</div>
+    <div style="display:flex;gap:4px;align-items:center">
+      <input type="text" id="discord-add-blocked" placeholder="e.g. amazon.ca" onkeydown="if(event.key==='Enter')addBlockedRetailer()" style="width:150px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px">
+      <button class="btn btn-ghost btn-sm" onclick="addBlockedRetailer()" style="font-size:10px;padding:2px 8px">+ Block</button>
+    </div>
+  </div>`;
+
   // Min price filter
   html += `<div style="width:100%;display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">
     <span style="font-size:10px;color:var(--muted)">Min price: $</span>
@@ -6093,6 +6118,26 @@ async function loadDiscordKeywords() {
   </div>`;
 
   el.innerHTML = html;
+}
+
+async function addBlockedRetailer() {
+  const input = document.getElementById('discord-add-blocked');
+  const val = input.value.trim();
+  if (!val) return;
+  await fetch('/api/discord/blocked-retailers/add', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({retailer: val}),
+  });
+  input.value = '';
+  loadDiscordKeywords();
+}
+
+async function removeBlockedRetailer(retailer) {
+  await fetch('/api/discord/blocked-retailers/remove', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({retailer}),
+  });
+  loadDiscordKeywords();
 }
 
 async function addManualKeyword() {

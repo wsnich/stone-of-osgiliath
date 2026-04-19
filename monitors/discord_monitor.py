@@ -60,6 +60,7 @@ class DiscordMonitor:
         token    = dc.get("token", "")
         channels = dc.get("channels_to_monitor", [])
         ignored_patterns = [p.lower() for p in dc.get("ignored_patterns", [])]
+        blocked_retailers = [r.lower() for r in dc.get("blocked_retailers", [])]
 
         # Build keywords: config keywords + auto-generated from products
         disabled = set(k.lower() for k in dc.get("disabled_keywords", []))
@@ -143,6 +144,14 @@ class DiscordMonitor:
                 if matched_ignore:
                     filtered_messages.append({**log_entry, "action": "filtered", "reason": f"ignored pattern: {matched_ignore[0]}"})
                     continue
+
+                # Check blocked retailers (by URL domain in embeds)
+                if blocked_retailers:
+                    all_urls = embed_text + " " + embed_fields_str.lower()
+                    blocked_match = [r for r in blocked_retailers if r in all_urls]
+                    if blocked_match:
+                        filtered_messages.append({**log_entry, "action": "filtered", "reason": f"blocked retailer: {blocked_match[0]}"})
+                        continue
 
                 # Check keyword matches
                 if keywords:

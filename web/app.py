@@ -383,17 +383,19 @@ async def monitor_loop():
         # ── Initialise next_check_at for new products ──────────────
         now = datetime.now()
         _SINGLES_IV = 6 * 3600
+        _GRADED_IV = config.get("graded_interval_seconds", 7 * 86400)
         for i in range(len(app_state.product_statuses)):
             if i not in next_check_at:
                 ps = app_state.product_statuses[i]
                 cat = ps.tags.get("category", "")
                 is_slow = cat in ("single", "comic")
 
-                # For singles/comics: respect the last check time from persisted state
+                # For singles/graded: respect the last check time from persisted state
                 if is_slow and ps.last_checked:
                     try:
                         last = datetime.strptime(ps.last_checked, "%Y-%m-%d %H:%M:%S")
-                        interval = ps.check_interval or _SINGLES_IV
+                        default_iv = _GRADED_IV if cat == "comic" else _SINGLES_IV
+                        interval = ps.check_interval or default_iv
                         due_at = last + timedelta(seconds=interval)
                         if due_at > now:
                             next_check_at[i] = due_at
@@ -488,8 +490,8 @@ async def monitor_loop():
                             await app_state.log("error", f"{ps.name}: {e}", "ebay")
 
                         is_comic = ps.tags.get("category") == "comic"
-                        _SINGLES_IV = 6 * 3600
-                        effective_iv = ps.check_interval or (_SINGLES_IV if is_comic else global_iv)
+                        _GRADED_IV_L = config.get("graded_interval_seconds", 7 * 86400)
+                        effective_iv = ps.check_interval or (_GRADED_IV_L if is_comic else global_iv)
                         _schedule_next(next_check_at, i, effective_iv, jitter_pct)
                         app_state.save_to_disk()
                         return
@@ -578,7 +580,8 @@ async def monitor_loop():
                             log.debug(f"eBay check error for {ps.name}: {e}")
 
                     _SINGLES_IV  = 6 * 3600
-                    effective_iv = ps.check_interval or (_SINGLES_IV if (is_single or is_comic) else global_iv)
+                    _GRADED_IV_L = config.get("graded_interval_seconds", 7 * 86400)
+                    effective_iv = ps.check_interval or (_GRADED_IV_L if is_comic else _SINGLES_IV if is_single else global_iv)
                     next_secs    = _schedule_next(next_check_at, i, effective_iv, jitter_pct)
 
                     update_kwargs = dict(
@@ -762,6 +765,15 @@ async def cache_image(url: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
+@app.get("/api/setup-status")
+async def setup_status():
+    """Check if the app needs initial setup."""
+    config = load_config()
+    dc = config.get("discord", {})
+    token = dc.get("token", "")
+    needs_setup = not token or "YOUR_" in token
+    return {"needs_setup": needs_setup}
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
@@ -1258,11 +1270,13 @@ async def get_discord_keywords():
             auto.append(pt.lower())
 
     ignored = dc.get("ignored_patterns", [])
+    blocked_retailers = dc.get("blocked_retailers", [])
     return {
         "manual": manual,
         "auto": auto,
         "disabled": disabled,
         "ignored": ignored,
+        "blocked_retailers": blocked_retailers,
         "min_price": dc.get("min_price", 0),
         "active": [k for k in (manual + auto) if k not in disabled],
     }
@@ -1414,6 +1428,29 @@ async def remove_discord_ignore_pattern(body: dict):
     if pattern in ignored:
         ignored.remove(pattern)
         config["discord"]["ignored_patterns"] = ignored
+        save_config(config)
+    return {"status": "ok"}
+
+@app.post("/api/discord/blocked-retailers/add")
+async def add_blocked_retailer(body: dict):
+    retailer = body.get("retailer", "").strip().lower()
+    if not retailer:
+        return {"error": "retailer required"}
+    config = load_config()
+    blocked = config.setdefault("discord", {}).setdefault("blocked_retailers", [])
+    if retailer not in blocked:
+        blocked.append(retailer)
+        save_config(config)
+    return {"status": "ok"}
+
+@app.post("/api/discord/blocked-retailers/remove")
+async def remove_blocked_retailer(body: dict):
+    retailer = body.get("retailer", "").strip().lower()
+    config = load_config()
+    blocked = config.get("discord", {}).get("blocked_retailers", [])
+    if retailer in blocked:
+        blocked.remove(retailer)
+        config["discord"]["blocked_retailers"] = blocked
         save_config(config)
     return {"status": "ok"}
 
@@ -1644,6 +1681,7 @@ async def get_settings():
         "schedule_end":          schedule.get("end", "23:00"),
         "data_dir":              config.get("data_dir") or "",
         "user_token":           config.get("discord", {}).get("token") or "",
+        "graded_interval_hours": round(config.get("graded_interval_seconds", 7 * 86400) / 3600),
         "reddit_subreddits":    config.get("reddit", {}).get("subreddits", ["sealedmtgdeals"]),
         "reddit_poll_interval": config.get("reddit", {}).get("poll_interval_seconds", 60),
         "discord_poll_interval": config.get("discord", {}).get("poll_interval_seconds", 30),
@@ -1680,6 +1718,8 @@ async def update_settings(body: dict):
         config["data_dir"] = body["data_dir"].strip() or None
     if "discord_poll_interval" in body:
         config.setdefault("discord", {})["poll_interval_seconds"] = max(10, min(120, int(body["discord_poll_interval"])))
+    if "graded_interval_hours" in body:
+        config["graded_interval_seconds"] = max(1, int(body["graded_interval_hours"])) * 3600
     if "reddit_subreddits" in body:
         subs = body["reddit_subreddits"]
         if isinstance(subs, str):
