@@ -520,19 +520,29 @@ async def monitor_loop():
                         # listing_prices has per-listing qty data; tcg_quantity is listing count from DOM
                         lp = result.listing_prices or []
 
-                        # Pagination sanity check: if new listing count dropped to ≤10
-                        # but previous had significantly more, it's a pagination failure.
-                        # Keep the old listing data and log a warning.
+                        # Pagination sanity check: detect partial captures where the
+                        # browser only got some pages of listings. Compare against
+                        # DOM-reported quantity AND previous listing count.
                         prev_lp = ps.listing_prices or []
                         new_count = len(lp)
                         prev_count = len(prev_lp)
-                        if new_count <= 10 and prev_count > 15 and new_count < prev_count * 0.5:
+                        dom_qty = result.tcg_quantity or 0  # "N Listings" from DOM header
+
+                        # The DOM quantity is the most reliable count — if we captured
+                        # significantly fewer listings than the DOM reports, it's a
+                        # partial capture. Also catch sudden drops vs previous.
+                        is_partial = False
+                        if dom_qty > 15 and new_count < dom_qty * 0.7:
+                            is_partial = True  # got less than 70% of DOM-reported listings
+                        elif prev_count > 15 and new_count < prev_count * 0.6:
+                            is_partial = True  # dropped more than 40% from previous
+
+                        if is_partial and prev_count > new_count:
                             await app_state.log("warn",
-                                f"{ps.name}: pagination likely failed ({new_count} vs prev {prev_count}) — keeping previous listing data",
+                                f"{ps.name}: partial listing capture ({new_count} vs DOM {dom_qty}, prev {prev_count}) — keeping previous",
                                 "tcgplayer")
                             lp = prev_lp
                             result.listing_prices = prev_lp
-                            # Also keep previous low_price if it was from full data
                             if ps.tcg_low_price is not None:
                                 result.low_price = ps.tcg_low_price
 

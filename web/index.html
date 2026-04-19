@@ -1546,6 +1546,97 @@ select.form-input option { background: var(--surface2); }
   color: var(--muted);
   font-size: 13px;
 }
+/* ── Mobile Responsive ─────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  /* Header */
+  header { padding: 0 12px; gap: 8px; height: auto; min-height: 48px; flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+  .logo { font-size: 14px; }
+  .logo span { display: none; }
+  .header-spacer { display: none; }
+  .status-pill { font-size: 10px; padding: 3px 8px; }
+
+  /* Container */
+  .container { padding: 10px; gap: 12px; }
+
+  /* Tab bar — horizontal scroll */
+  .tab-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; flex-wrap: nowrap; }
+  .tab-bar::-webkit-scrollbar { display: none; }
+  .tab-btn { padding: 6px 12px; font-size: 10px; white-space: nowrap; flex-shrink: 0; }
+
+  /* Section header */
+  .section-header { flex-wrap: wrap; gap: 6px; }
+
+  /* Reddit/Discord feed sections */
+  .reddit-section { margin: 0 -10px; }
+  .reddit-panel { border-radius: 0; }
+  .reddit-header { flex-wrap: wrap; gap: 4px; padding: 6px 10px; }
+  .reddit-title { font-size: 12px; }
+
+  /* Discord feed rows — stack on mobile */
+  .discord-row {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+    font-size: 10px !important;
+    padding: 6px 8px !important;
+    grid-template-columns: none !important;
+  }
+  .discord-row > div { min-width: auto !important; }
+
+  /* TCGPlayer condensed table — hide some columns */
+  .tcg-table-row, .tcg-table-header {
+    grid-template-columns: 28px 1fr 70px 60px 70px !important;
+  }
+  .tcg-table-row > div:nth-child(5), .tcg-table-header > span:nth-child(5),
+  .tcg-table-row > div:nth-child(6), .tcg-table-header > span:nth-child(6) { display: none; }
+
+  /* Product cards */
+  .product-card { padding: 10px; }
+  .product-card.hub-card { flex-direction: column; gap: 8px; }
+  .product-card.hub-card img { width: 50px; height: 50px; }
+
+  /* Single/TCGPlayer cards */
+  .single-card { flex-direction: column; }
+  .single-card-img { width: 100%; height: 100px; }
+  .single-card-img img { object-fit: contain; }
+
+  /* TCGPlayer table rows */
+  .tcg-table-row { font-size: 10px; padding: 4px 6px; }
+  .tcg-table-header { font-size: 8px; padding: 3px 6px; }
+
+  /* Modals */
+  .modal { margin: 10px; max-height: 90vh; overflow-y: auto; }
+
+  /* Filter bars */
+  .filter-bar { flex-wrap: wrap; gap: 4px; }
+  .filter-bar select { font-size: 10px; }
+
+  /* Settings bar */
+  .settings-bar { flex-direction: column; gap: 6px; }
+
+  /* Log panel */
+  .log-entry { font-size: 10px; }
+}
+
+@media (max-width: 480px) {
+  /* Header — minimal */
+  header { gap: 4px; }
+  .logo { font-size: 12px; }
+  .btn-sm { font-size: 10px; padding: 3px 6px; }
+
+  /* Tab bar */
+  .tab-btn { padding: 5px 8px; font-size: 9px; }
+
+  /* Cards stack fully */
+  .single-card-prices { flex-wrap: wrap; }
+  .sp { min-width: 60px; }
+
+  /* Stat cards */
+  .stat-card { padding: 6px 8px; }
+  .stat-value { font-size: 14px; }
+  .stat-label { font-size: 9px; }
+}
 </style>
 </head>
 <body>
