@@ -22,6 +22,11 @@
 
   "products": [],
 
+  "reddit": {
+    "subreddits": ["sealedmtgdeals"],
+    "poll_interval_seconds": 60
+  },
+
   "discord": {
     "enabled": false,
     "token": "YOUR_DISCORD_USER_TOKEN_HERE",

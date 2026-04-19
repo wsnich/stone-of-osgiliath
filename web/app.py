@@ -92,77 +92,88 @@ def check_schedule(schedule: dict) -> tuple[bool, int, str]:
 
 async def reddit_poll_loop():
     """
-    Polls r/sealedmtgdeals every 60 seconds.
-    On first fetch: populates app_state.reddit_posts (no "new" broadcast).
-    On subsequent fetches: broadcasts unseen posts as reddit_post events.
+    Polls configured subreddits for new posts.
+    Reads subreddit list from config.reddit.subreddits (default: ["sealedmtgdeals"]).
     """
     import aiohttp
 
     global _seen_reddit_ids, _reddit_initialized
 
-    subreddit = "sealedmtgdeals"
-    url       = f"https://www.reddit.com/r/{subreddit}/new.json?limit=25"
-    headers   = {"User-Agent": "MTGMonitor/1.0 (deal monitoring bot)"}
+    headers = {"User-Agent": "StoneOfOsgiliath/1.0 (deal monitoring)"}
 
-    await asyncio.sleep(5)  # let the monitor loop and WS clients connect first
+    await asyncio.sleep(5)
     await app_state.log("info", "Reddit feed starting...", "reddit")
 
     while True:
         try:
+            config = load_config()
+            reddit_cfg = config.get("reddit", {})
+            subreddits = reddit_cfg.get("subreddits", ["sealedmtgdeals"])
+            if not subreddits:
+                await asyncio.sleep(60)
+                continue
+
             async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status == 200:
-                        data     = await resp.json()
-                        children = data.get("data", {}).get("children", [])
+                for subreddit in subreddits:
+                    subreddit = subreddit.strip().lower()
+                    if not subreddit:
+                        continue
+                    url = f"https://www.reddit.com/r/{subreddit}/new.json?limit=25"
+                    try:
+                        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                children = data.get("data", {}).get("children", [])
 
-                        if not _reddit_initialized:
-                            for child in children:
-                                p   = child["data"]
-                                pid = p["id"]
-                                _seen_reddit_ids.add(pid)
-                                app_state.reddit_posts.append(_make_reddit_entry(p, is_new=False))
-                            _reddit_initialized = True
-                            await app_state.log("info", f"Loaded {len(children)} posts from r/{subreddit}", "reddit")
-                            await app_state.ws.broadcast(app_state.snapshot())
-                        else:
-                            new_posts = []
-                            for child in children:
-                                p   = child["data"]
-                                pid = p["id"]
-                                if pid not in _seen_reddit_ids:
-                                    _seen_reddit_ids.add(pid)
-                                    entry = _make_reddit_entry(p, is_new=True)
-                                    app_state.reddit_posts.appendleft(entry)
-                                    new_posts.append(entry)
+                                if not _reddit_initialized:
+                                    for child in children:
+                                        p = child["data"]
+                                        _seen_reddit_ids.add(p["id"])
+                                        app_state.reddit_posts.append(_make_reddit_entry(p, subreddit, is_new=False))
+                                    await app_state.log("info", f"Loaded {len(children)} posts from r/{subreddit}", "reddit")
+                                else:
+                                    new_posts = []
+                                    for child in children:
+                                        p = child["data"]
+                                        if p["id"] not in _seen_reddit_ids:
+                                            _seen_reddit_ids.add(p["id"])
+                                            entry = _make_reddit_entry(p, subreddit, is_new=True)
+                                            app_state.reddit_posts.appendleft(entry)
+                                            new_posts.append(entry)
 
-                            # Broadcast oldest-first so the UI prepends in correct order
-                            for entry in reversed(new_posts):
-                                await app_state.ws.broadcast({"type": "reddit_post", "data": entry})
+                                    for entry in reversed(new_posts):
+                                        await app_state.ws.broadcast({"type": "reddit_post", "data": entry})
 
-                            if new_posts:
-                                await app_state.log(
-                                    "info",
-                                    f"{len(new_posts)} new post(s) in r/{subreddit}",
-                                    "reddit",
-                                )
-                    else:
-                        await app_state.log("warn", f"Reddit returned HTTP {resp.status}", "reddit")
+                                    if new_posts:
+                                        await app_state.log("info", f"{len(new_posts)} new post(s) in r/{subreddit}", "reddit")
+                            elif resp.status == 403:
+                                await app_state.log("warn", f"r/{subreddit}: access denied (private?)", "reddit")
+                            elif resp.status != 429:
+                                await app_state.log("warn", f"r/{subreddit}: HTTP {resp.status}", "reddit")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        await app_state.log("warn", f"r/{subreddit}: {e}", "reddit")
+
+            if not _reddit_initialized:
+                _reddit_initialized = True
+                await app_state.ws.broadcast(app_state.snapshot())
+
         except asyncio.CancelledError:
             raise
         except Exception as e:
             await app_state.log("warn", f"Reddit poll error: {e}", "reddit")
 
-        await asyncio.sleep(60)
+        poll_interval = config.get("reddit", {}).get("poll_interval_seconds", 60)
+        await asyncio.sleep(max(30, poll_interval))
 
 
-def _make_reddit_entry(p: dict, is_new: bool) -> dict:
+def _make_reddit_entry(p: dict, subreddit: str, is_new: bool) -> dict:
     return {
         "id":           p["id"],
         "title":        p.get("title", ""),
         "author":       p.get("author", "[deleted]"),
+        "subreddit":    subreddit,
         "score":        p.get("score", 0),
         "url":          p.get("url", ""),
         "permalink":    "https://www.reddit.com" + p.get("permalink", ""),
@@ -1633,6 +1644,8 @@ async def get_settings():
         "schedule_end":          schedule.get("end", "23:00"),
         "data_dir":              config.get("data_dir") or "",
         "user_token":           config.get("discord", {}).get("token") or "",
+        "reddit_subreddits":    config.get("reddit", {}).get("subreddits", ["sealedmtgdeals"]),
+        "reddit_poll_interval": config.get("reddit", {}).get("poll_interval_seconds", 60),
         "discord_poll_interval": config.get("discord", {}).get("poll_interval_seconds", 30),
         "bot_token":            config.get("discord", {}).get("bot_token") or "",
         "dm_user_id":           config.get("discord", {}).get("dm_user_id") or "",
@@ -1667,6 +1680,13 @@ async def update_settings(body: dict):
         config["data_dir"] = body["data_dir"].strip() or None
     if "discord_poll_interval" in body:
         config.setdefault("discord", {})["poll_interval_seconds"] = max(10, min(120, int(body["discord_poll_interval"])))
+    if "reddit_subreddits" in body:
+        subs = body["reddit_subreddits"]
+        if isinstance(subs, str):
+            subs = [s.strip() for s in subs.split(",") if s.strip()]
+        config.setdefault("reddit", {})["subreddits"] = subs
+    if "reddit_poll_interval" in body:
+        config.setdefault("reddit", {})["poll_interval_seconds"] = max(30, min(300, int(body["reddit_poll_interval"])))
     if "user_token" in body:
         config.setdefault("discord", {})["token"] = body["user_token"].strip() or None
     if "bot_token" in body:

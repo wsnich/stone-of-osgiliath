@@ -1634,6 +1634,19 @@ select.form-input option { background: var(--surface2); }
         <input type="checkbox" id="set-headless" checked> Headless mode (no visible browser)
       </label>
 
+      <!-- Reddit -->
+      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Reddit</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label class="form-label">Subreddits <span style="color:var(--muted);font-weight:400">comma-separated, blank to disable</span></label>
+          <input type="text" class="form-input" id="set-reddit-subs" placeholder="sealedmtgdeals, pokemontcg" style="font-size:10px">
+        </div>
+        <div>
+          <label class="form-label">Poll Interval (seconds) <span style="color:var(--muted);font-weight:400">min 30</span></label>
+          <input type="number" class="form-input" id="set-reddit-poll" min="30" max="300" value="60">
+        </div>
+      </div>
+
       <!-- Discord -->
       <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Discord</div>
       <div>
@@ -1679,7 +1692,7 @@ select.form-input option { background: var(--surface2); }
   <div class="reddit-panel">
     <div class="reddit-header">
       <span class="reddit-title">Reddit Feed</span>
-      <span class="reddit-sub-badge">r/sealedmtgdeals</span>
+      <span class="reddit-sub-badge" id="reddit-sub-label">Reddit</span>
       <span class="reddit-poll-label" id="reddit-poll-label" style="font-size:10px;color:var(--muted)"></span>
       <button id="reddit-expand-btn" class="reddit-expand-btn" onclick="toggleRedditExpand()" style="display:none"></button>
     </div>
@@ -1765,9 +1778,9 @@ select.form-input option { background: var(--surface2); }
         <button class="tab-btn active" id="tab-products" onclick="switchTab('products')">Products</button>
         <button class="tab-btn" id="tab-deals" onclick="switchTab('deals')">Deals</button>
         <button class="tab-btn" id="tab-tcgplayer" onclick="switchTab('tcgplayer')">TCGPlayer</button>
-        <button class="tab-btn" id="tab-comics" onclick="switchTab('comics')">Comics</button>
+        <button class="tab-btn" id="tab-graded" onclick="switchTab('graded')">Graded</button>
         <button class="tab-btn" id="tab-portfolio" onclick="switchTab('portfolio')">Portfolio</button>
-        <button class="tab-btn" id="tab-overview" onclick="switchTab('overview')">Overview</button>
+        <button class="tab-btn" id="tab-intelligence" onclick="switchTab('intelligence')">Intelligence</button>
       </div>
       <button class="btn btn-primary btn-sm" id="add-btn" onclick="handleAddBtn()" style="display:none">+ Add Product</button>
     </div>
@@ -1836,8 +1849,8 @@ select.form-input option { background: var(--surface2); }
 
     </div><!-- /panel-tcgplayer -->
 
-    <!-- ── Comics tab ──────────────────────────────────────── -->
-    <div class="tab-panel" id="panel-comics">
+    <!-- ── Graded tab ──────────────────────────────────────── -->
+    <div class="tab-panel" id="panel-graded">
 
     <div class="filter-bar" id="comics-filter-bar" style="display:none">
       <select id="comics-filter-series" onchange="applyComicsFilters()"><option value="">All Series</option></select>
@@ -1845,18 +1858,18 @@ select.form-input option { background: var(--surface2); }
       <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
         <button class="btn btn-ghost btn-sm" id="comics-view-normal" onclick="setComicsView('normal')" style="font-size:10px;padding:2px 8px">Cards</button>
         <button class="btn btn-ghost btn-sm" id="comics-view-condensed" onclick="setComicsView('condensed')" style="font-size:10px;padding:2px 8px">Table</button>
-        <button class="btn btn-ghost btn-sm" onclick="forceRefreshCategory('comic')" title="Force refresh all comics now">↻ Refresh All</button>
+        <button class="btn btn-ghost btn-sm" onclick="forceRefreshCategory('comic')" title="Force refresh all graded items">↻ Refresh All</button>
       </div>
     </div>
 
     <div class="products-grid" id="comics-grid">
       <div class="empty-state">
-        <strong>No comics yet</strong>
-        <p>Click <em>+ Add Comic</em> to start monitoring a comic.</p>
+        <strong>No graded items yet</strong>
+        <p>Click <em>+ Add Graded</em> to start monitoring a graded collectible (comics, Pokemon cards, baseball cards, etc.)</p>
       </div>
     </div>
 
-    </div><!-- /panel-comics -->
+    </div><!-- /panel-graded -->
 
     <!-- ── Portfolio tab ───────────────────────────────────── -->
     <div class="tab-panel" id="panel-portfolio">
@@ -1872,8 +1885,8 @@ select.form-input option { background: var(--surface2); }
 
     </div><!-- /panel-portfolio -->
 
-    <!-- ── Overview tab (Retailer Intelligence) ────────────── -->
-    <div class="tab-panel" id="panel-overview">
+    <!-- ── Intelligence tab (Retailer Intelligence) ──────────── -->
+    <div class="tab-panel" id="panel-intelligence">
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
       <span style="font-size:12px;color:var(--muted)">Retailer Intelligence — learned from Discord feed data</span>
@@ -1891,7 +1904,7 @@ select.form-input option { background: var(--surface2); }
     <!-- Product matrix -->
     <div id="overview-products"></div>
 
-    </div><!-- /panel-overview -->
+    </div><!-- /panel-intelligence -->
 
   </div>
 
@@ -2341,7 +2354,7 @@ connectWS();
 // Restore tab from URL hash after reload
 if (window.location.hash) {
   const tab = window.location.hash.slice(1);
-  if (['deals','products','tcgplayer','comics','portfolio','overview'].includes(tab)) switchTab(tab);
+  if (['deals','products','tcgplayer','graded','portfolio','intelligence'].includes(tab)) switchTab(tab);
   history.replaceState(null, '', window.location.pathname);
 }
 
@@ -2508,7 +2521,7 @@ function updateProductCard(p) {
   else { products[i] = p; }
   renderHubGrid();
   if (_activeTab === 'tcgplayer') renderTcgGrid();
-  if (_activeTab === 'comics')  renderComicsGrid();
+  if (_activeTab === 'graded')  renderComicsGrid();
   // Refresh sales modal if open for this product
   if (_salesModalIndex === i && p.ebay_sales) {
     renderSalesModalList(p, i);
@@ -2655,18 +2668,18 @@ function openModal() {
   }
   editingIndex = null;
   const isTcgTab = _activeTab === 'tcgplayer';
-  const isComicsTab  = _activeTab === 'comics';
-  const titles = { tcgplayer: 'Add TCGPlayer Item', comics: 'Add Comic' };
+  const isGradedTab  = _activeTab === 'graded';
+  const titles = { tcgplayer: 'Add TCGPlayer Item', graded: 'Add Graded Item' };
   document.getElementById('modal-title').textContent = titles[_activeTab] || 'Add Product';
   document.getElementById('f-name').value      = '';
   document.getElementById('f-url').value       = '';
-  document.getElementById('f-site').value      = (isTcgTab || isComicsTab) ? (isComicsTab ? 'ebay' : 'tcgplayer') : 'walmart';
+  document.getElementById('f-site').value      = (isTcgTab || isGradedTab) ? (isGradedTab ? 'ebay' : 'tcgplayer') : 'walmart';
   document.getElementById('f-price').value     = '';
   document.getElementById('f-interval').value  = '';
   document.getElementById('f-enabled').checked = true;
-  document.getElementById('f-tag-retailer').value     = isTcgTab ? 'TCGPlayer' : isComicsTab ? 'eBay' : '';
+  document.getElementById('f-tag-retailer').value     = isTcgTab ? 'TCGPlayer' : isGradedTab ? 'eBay' : '';
   document.getElementById('f-tag-set').value          = '';
-  document.getElementById('f-tag-product_type').value = isComicsTab ? 'Comic' : '';
+  document.getElementById('f-tag-product_type').value = '';
   document.getElementById('f-tcg-type').value         = 'single';
   document.getElementById('f-tag-condition').value    = isTcgTab ? 'Near Mint' : '';
   document.getElementById('f-tag-printing').value     = '';
@@ -2711,19 +2724,18 @@ function updateTcgTypeVisibility() {
 
 function updateTcgFiltersVisibility() {
   const site = document.getElementById('f-site').value;
-  const isComic = _activeTab === 'comics';
-  const isTcg = site === 'tcgplayer' && !isComic;
+  const isGradedMode = _activeTab === 'graded';
+  const isTcg = site === 'tcgplayer' && !isGradedMode;
   document.getElementById('tcg-type-row').style.display = isTcg ? '' : 'none';
   const isSingle = document.getElementById('f-tcg-type').value === 'single';
   document.getElementById('tcg-filters-row').style.display = isTcg && isSingle ? '' : 'none';
-  document.getElementById('comic-filters-row').style.display = isComic ? '' : 'none';
-  // Hide URL/Site/Max Price for comics — they're eBay search-only
-  document.getElementById('field-url').style.display        = isComic ? 'none' : '';
-  document.getElementById('field-site-price').style.display = isComic ? 'none' : '';
-  // Relabel "Set / Game" → "Series" for comics, hide Product Type
-  document.getElementById('label-set').textContent          = isComic ? 'Series' : 'Set / Game';
-  document.getElementById('f-tag-set').placeholder          = isComic ? 'e.g. Black Cat' : 'e.g. Secrets of Strixhaven';
-  document.getElementById('field-product-type').style.display = isComic ? 'none' : '';
+  document.getElementById('comic-filters-row').style.display = isGradedMode ? '' : 'none';
+  // Hide URL/Site/Max Price for graded items — they're eBay search-only
+  document.getElementById('field-url').style.display        = isGradedMode ? 'none' : '';
+  document.getElementById('field-site-price').style.display = isGradedMode ? 'none' : '';
+  document.getElementById('label-set').textContent          = isGradedMode ? 'Series / Set' : 'Set / Game';
+  document.getElementById('f-tag-set').placeholder          = isGradedMode ? 'e.g. Black Cat, Base Set, Topps Chrome' : 'e.g. Secrets of Strixhaven';
+  document.getElementById('field-product-type').style.display = isGradedMode ? 'none' : '';
 }
 
 function openEditModal(i) {
@@ -2766,20 +2778,20 @@ function closeModalOutside(e) {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 async function submitProduct() {
-  const isComicAdd = _activeTab === 'comics' && editingIndex === null;
-  const isComicEdit = editingIndex !== null && (products[editingIndex]?.tags || {}).category === 'comic';
-  const isComic = isComicAdd || isComicEdit;
+  const isGradedAdd = _activeTab === 'graded' && editingIndex === null;
+  const isGradedEdit = editingIndex !== null && (products[editingIndex]?.tags || {}).category === 'comic';
+  const isGraded = isGradedAdd || isGradedEdit;
 
   const isTcg = _activeTab === 'tcgplayer' || (editingIndex !== null && products[editingIndex]?.site === 'tcgplayer');
   const name     = document.getElementById('f-name').value.trim();
-  const url      = isComic ? '' : document.getElementById('f-url').value.trim();
-  let   site     = isComic ? 'ebay' : document.getElementById('f-site').value;
-  let   price    = isComic || isTcg ? 9999 : parseFloat(document.getElementById('f-price').value);
+  const url      = isGraded ? '' : document.getElementById('f-url').value.trim();
+  let   site     = isGraded ? 'ebay' : document.getElementById('f-site').value;
+  let   price    = isGraded || isTcg ? 9999 : parseFloat(document.getElementById('f-price').value);
   const interval = parseInt(document.getElementById('f-interval').value) || 0;
   const enabled  = document.getElementById('f-enabled').checked;
 
-  if (!name || (!isComic && !isTcg && (!url || isNaN(price)))) {
-    alert(isComic ? 'Please fill in the comic name.' : isTcg ? 'Please fill in Name and URL.' : 'Please fill in Name, URL, and Max Price.');
+  if (!name || (!isGraded && !isTcg && (!url || isNaN(price)))) {
+    alert(isGraded ? 'Please fill in the item name.' : isTcg ? 'Please fill in Name and URL.' : 'Please fill in Name, URL, and Max Price.');
     return;
   }
   if (isTcg && !url) {
@@ -2814,7 +2826,7 @@ async function submitProduct() {
     const tcgType = document.getElementById('f-tcg-type').value;
     if (tcgType === 'single') tags.category = 'single';
   }
-  if (_activeTab === 'comics' && editingIndex === null) tags.category = 'comic';
+  if (_activeTab === 'graded' && editingIndex === null) tags.category = 'comic';
   // Preserve category when editing
   const existingCat = editingIndex !== null ? (products[editingIndex]?.tags || {}).category : null;
   if (existingCat === 'single' || existingCat === 'comic') tags.category = existingCat;
@@ -2890,6 +2902,8 @@ async function openSettingsModal() {
   document.getElementById('set-schedule-start').value = data.schedule_start || '07:00';
   document.getElementById('set-schedule-end').value = data.schedule_end || '23:00';
   document.getElementById('set-data-dir').value = data.data_dir || '';
+  document.getElementById('set-reddit-subs').value = (data.reddit_subreddits || []).join(', ');
+  document.getElementById('set-reddit-poll').value = data.reddit_poll_interval || 60;
   document.getElementById('set-user-token').value = data.user_token || '';
   document.getElementById('set-discord-poll').value = data.discord_poll_interval || 30;
   document.getElementById('set-bot-token').value = data.bot_token || '';
@@ -2931,6 +2945,8 @@ async function saveSettingsModal() {
     schedule_start: document.getElementById('set-schedule-start').value,
     schedule_end: document.getElementById('set-schedule-end').value,
     data_dir: document.getElementById('set-data-dir').value.trim(),
+    reddit_subreddits: document.getElementById('set-reddit-subs').value.trim(),
+    reddit_poll_interval: parseInt(document.getElementById('set-reddit-poll').value) || 60,
     user_token: document.getElementById('set-user-token').value.trim(),
     discord_poll_interval: parseInt(document.getElementById('set-discord-poll').value) || 30,
     bot_token: document.getElementById('set-bot-token').value.trim(),
@@ -3471,11 +3487,11 @@ let _activeTab = 'products';
 
 function switchTab(tab) {
   _activeTab = tab;
-  for (const t of ['deals', 'products', 'tcgplayer', 'comics', 'portfolio', 'overview']) {
+  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence']) {
     document.getElementById(`tab-${t}`).classList.toggle('active', tab === t);
     document.getElementById(`panel-${t}`).classList.toggle('active', tab === t);
   }
-  const labels = { products: '+ Add Product', tcgplayer: '+ Add TCGPlayer', comics: '+ Add Comic', portfolio: '+ Add Item' };
+  const labels = { products: '+ Add Product', tcgplayer: '+ Add TCGPlayer', graded: '+ Add Graded', portfolio: '+ Add Item' };
   const addBtn = document.getElementById('add-btn');
   if (labels[tab]) {
     addBtn.textContent = labels[tab];
@@ -3487,8 +3503,8 @@ function switchTab(tab) {
   if (tab === 'deals')      renderTrackedDeals();
   if (tab === 'products')   renderHubGrid();
   if (tab === 'tcgplayer')  renderTcgGrid();
-  if (tab === 'overview')   loadOverview();
-  if (tab === 'comics')     renderComicsGrid();
+  if (tab === 'intelligence') loadOverview();
+  if (tab === 'graded')     renderComicsGrid();
   if (tab === 'portfolio')  loadPortfolio();
 }
 
@@ -4640,7 +4656,7 @@ function renderComicsGrid() {
   document.getElementById('comics-view-condensed')?.classList.toggle('view-active', _comicsView === 'condensed');
 
   if (!comics.length) {
-    grid.innerHTML = '<div class="empty-state"><strong>No comics yet</strong><p>Click <em>+ Add Comic</em> to start monitoring.</p></div>';
+    grid.innerHTML = '<div class="empty-state"><strong>No graded items yet</strong><p>Click <em>+ Add Graded</em> to start monitoring graded collectibles.</p></div>';
     rebuildComicsFilterDropdowns();
     return;
   }
@@ -6446,6 +6462,7 @@ function redditPostHTML(p) {
     <a class="reddit-post-title" href="${esc(primaryHref)}" target="_blank" rel="noopener">${esc(p.title)}</a>
     <div class="reddit-post-meta">
       ${newBadge}
+      ${p.subreddit ? `<span style="color:#ff4500;font-weight:600;font-size:10px">r/${esc(p.subreddit)}</span>` : ''}
       ${flair}
       <span>u/${esc(p.author)}</span>
       <a class="reddit-comments-link" href="${esc(p.permalink)}" target="_blank" rel="noopener">${p.num_comments} comment${p.num_comments !== 1 ? 's' : ''}</a>
