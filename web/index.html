@@ -1732,6 +1732,22 @@ select.form-input option { background: var(--surface2); }
         <input type="number" class="form-input" id="set-graded-interval" min="1" max="720" value="168" style="width:100px">
       </div>
 
+      <!-- Marketplace -->
+      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Marketplace (BST Channels)</div>
+      <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="set-mp-enabled"> Enable marketplace monitoring
+      </label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label class="form-label">Sell Channel IDs <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
+          <input type="text" class="form-input" id="set-mp-sell" placeholder="Channel ID(s)" style="font-size:10px">
+        </div>
+        <div>
+          <label class="form-label">Buy Channel IDs <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
+          <input type="text" class="form-input" id="set-mp-buy" placeholder="Channel ID(s)" style="font-size:10px">
+        </div>
+      </div>
+
       <!-- Reddit -->
       <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Reddit</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -2432,6 +2448,9 @@ function connectWS() {
         prependDiscordPost(msg.data);
         if (_activeTab === 'intelligence') loadOverview();
         break;
+      case 'marketplace_listing':
+        handleMarketplaceListing(msg.data);
+        break;
       case 'reddit_post':
         prependRedditPost(msg.data);
         break;
@@ -3005,6 +3024,9 @@ async function openSettingsModal() {
   document.getElementById('set-schedule-end').value = data.schedule_end || '23:00';
   document.getElementById('set-data-dir').value = data.data_dir || '';
   document.getElementById('set-graded-interval').value = data.graded_interval_hours || 168;
+  document.getElementById('set-mp-enabled').checked = data.marketplace_enabled || false;
+  document.getElementById('set-mp-sell').value = (data.marketplace_sell_channels || []).join(', ');
+  document.getElementById('set-mp-buy').value = (data.marketplace_buy_channels || []).join(', ');
   document.getElementById('set-reddit-subs').value = (data.reddit_subreddits || []).join(', ');
   document.getElementById('set-reddit-poll').value = data.reddit_poll_interval || 60;
   document.getElementById('set-user-token').value = data.user_token || '';
@@ -3049,6 +3071,9 @@ async function saveSettingsModal() {
     schedule_end: document.getElementById('set-schedule-end').value,
     data_dir: document.getElementById('set-data-dir').value.trim(),
     graded_interval_hours: parseInt(document.getElementById('set-graded-interval').value) || 168,
+    marketplace_enabled: document.getElementById('set-mp-enabled').checked,
+    marketplace_sell_channels: document.getElementById('set-mp-sell').value.trim(),
+    marketplace_buy_channels: document.getElementById('set-mp-buy').value.trim(),
     reddit_subreddits: document.getElementById('set-reddit-subs').value.trim(),
     reddit_poll_interval: parseInt(document.getElementById('set-reddit-poll').value) || 60,
     user_token: document.getElementById('set-user-token').value.trim(),
@@ -6609,6 +6634,44 @@ function togglePanel(name) {
   if (body) body.style.display = _panelOpen[name] ? '' : 'none';
   if (icon) icon.textContent   = _panelOpen[name] ? '▲' : '▼ expand';
 }
+
+// ── Marketplace (BST) ────────────────────────────────────────────
+
+let _marketplaceListings = [];
+
+function handleMarketplaceListing(data) {
+  _marketplaceListings.unshift(data);
+  if (_marketplaceListings.length > 100) _marketplaceListings.pop();
+
+  // Show a toast for matched items below market
+  for (const item of (data.items || [])) {
+    if (item.product_index != null) {
+      const ps = products[item.product_index];
+      if (ps?.price && item.price < ps.price * 0.85) {
+        const pct = ((item.price - ps.price) / ps.price * 100).toFixed(0);
+        showMarketplaceToast(data, item, pct, ps.price);
+      }
+    }
+  }
+}
+
+function showMarketplaceToast(listing, item, pct, market) {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = 'toast deal';
+  toast.innerHTML = `
+    <div class="toast-title">🏪 Marketplace Deal!</div>
+    <div class="toast-body">
+      ${esc(item.product_name || item.name)}<br>
+      <b>$${item.price.toFixed(2)}</b> (${pct}% vs TCG $${market.toFixed(2)})<br>
+      Seller: @${esc(listing.seller)} —
+      <a href="${escUrl(listing.jump_url)}" target="_blank" style="color:var(--blue)">Jump to message ↗</a>
+    </div>`;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 20000);
+}
+
 
 // ── Reddit feed ──────────────────────────────────────────────────
 

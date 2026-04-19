@@ -124,6 +124,24 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_rs_game ON retailer_sightings(game)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_rs_product ON retailer_sightings(product_name)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_rs_time ON retailer_sightings(timestamp)")
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS marketplace_messages (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                msg_id        TEXT    NOT NULL,
+                channel_id    TEXT,
+                seller        TEXT,
+                seller_id     TEXT,
+                intent        TEXT,
+                raw_text      TEXT,
+                items_json    TEXT,
+                matched_json  TEXT,
+                timestamp     TEXT,
+                logged_at     TEXT    NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_mp_time ON marketplace_messages(timestamp)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_mp_seller ON marketplace_messages(seller)")
         await db.commit()
 
 # ---------------------------------------------------------------------------
@@ -467,6 +485,43 @@ async def backfill_retailer_sightings() -> int:
 
         await db.commit()
     return count
+
+
+# ---------------------------------------------------------------------------
+# Marketplace messages
+# ---------------------------------------------------------------------------
+
+async def record_marketplace_message(
+    msg_id: str, channel_id: str, seller: str, seller_id: str,
+    intent: str, raw_text: str, items_json: str, matched_json: str,
+    timestamp: str,
+) -> None:
+    from datetime import datetime as _dt
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO marketplace_messages
+               (msg_id, channel_id, seller, seller_id, intent, raw_text,
+                items_json, matched_json, timestamp, logged_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (msg_id, channel_id, seller, seller_id, intent, raw_text[:1000],
+             items_json, matched_json, timestamp,
+             _dt.now().strftime("%Y-%m-%d %H:%M:%S")),
+        )
+        await db.commit()
+
+
+async def get_marketplace_listings(limit: int = 50, intent: str = "") -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        query = "SELECT * FROM marketplace_messages"
+        params = []
+        if intent:
+            query += " WHERE intent = ?"
+            params.append(intent)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        async with db.execute(query, params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 # Write — eBay sold history
