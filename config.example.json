@@ -1,0 +1,41 @@
+{
+  "_comment": "Copy this file to config.json and fill in your values",
+
+  "check_interval_seconds": 300,
+
+  "data_dir": null,
+
+  "stealth": {
+    "jitter_pct": 20,
+    "headless": true,
+    "user_agent": null,
+    "browser_channel": null,
+    "page_timeout_ms": 30000,
+    "network_timeout_seconds": 15
+  },
+
+  "schedule": {
+    "enabled": false,
+    "start": "07:00",
+    "end": "23:00"
+  },
+
+  "products": [],
+
+  "discord": {
+    "enabled": false,
+    "token": "YOUR_DISCORD_USER_TOKEN_HERE",
+    "bot_token": "YOUR_BOT_TOKEN_HERE",
+    "dm_user_id": "YOUR_DISCORD_USER_ID",
+    "channels_to_monitor": [],
+    "keywords": [],
+    "disabled_keywords": [],
+    "min_price": 0,
+    "ignored_patterns": []
+  },
+
+  "notifications": {
+    "desktop": true,
+    "sound": true
+  }
+}

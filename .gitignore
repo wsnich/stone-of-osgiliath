@@ -1,0 +1,22 @@
+# Secrets / personal config
+config.json
+.env
+
+# Runtime state (regenerated automatically)
+app_state.json
+tracked_deals.json
+products_hub.json
+portfolio.json
+*.db
+
+# Cached images
+web/images/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
