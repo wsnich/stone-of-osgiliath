@@ -1738,7 +1738,11 @@ async def update_settings(body: dict):
     if "reddit_poll_interval" in body:
         config.setdefault("reddit", {})["poll_interval_seconds"] = max(30, min(300, int(body["reddit_poll_interval"])))
     if "user_token" in body:
-        config.setdefault("discord", {})["token"] = body["user_token"].strip() or None
+        token_val = body["user_token"].strip()
+        config.setdefault("discord", {})["token"] = token_val or None
+        # Auto-enable Discord when a real token is provided
+        if token_val and "YOUR_" not in token_val:
+            config["discord"]["enabled"] = True
     if "bot_token" in body:
         config.setdefault("discord", {})["bot_token"] = body["bot_token"].strip() or None
     if "dm_user_id" in body:
