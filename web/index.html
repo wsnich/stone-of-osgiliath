@@ -1889,7 +1889,7 @@ select.form-input option { background: var(--surface2); }
   <div>
     <div class="section-header">
       <div class="tab-bar">
-        <button class="tab-btn active" id="tab-products" onclick="switchTab('products')">Products</button>
+        <button class="tab-btn active" id="tab-products" onclick="switchTab('products')">Watchlist</button>
         <button class="tab-btn" id="tab-deals" onclick="switchTab('deals')">Deals</button>
         <button class="tab-btn" id="tab-tcgplayer" onclick="switchTab('tcgplayer')">TCGPlayer</button>
         <button class="tab-btn" id="tab-graded" onclick="switchTab('graded')">Graded</button>
@@ -2005,7 +2005,7 @@ select.form-input option { background: var(--surface2); }
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
       <span style="font-size:12px;color:var(--muted)">Retailer Intelligence — learned from Discord feed data</span>
       <select id="overview-game-filter" onchange="renderOverview()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:2px 6px;margin-left:auto">
-        <option value="">All Games</option>
+        <option value="">All Products</option>
       </select>
     </div>
 
@@ -2250,7 +2250,7 @@ select.form-input option { background: var(--surface2); }
 <!-- ── Product Hub add/edit modal ───────────────────────────── -->
 <div class="modal-backdrop" id="hub-modal" onclick="if(event.target===this)closeHubModal()" style="display:none">
   <div class="modal" style="max-width:480px">
-    <div class="modal-title" id="hub-modal-title">Add Product</div>
+    <div class="modal-title" id="hub-modal-title">Add to Watchlist</div>
     <input type="hidden" id="hub-edit-id">
     <label class="form-label">Name</label>
     <input type="text" class="form-input" id="hub-name">
@@ -3620,7 +3620,7 @@ function switchTab(tab) {
     document.getElementById(`tab-${t}`).classList.toggle('active', tab === t);
     document.getElementById(`panel-${t}`).classList.toggle('active', tab === t);
   }
-  const labels = { products: '+ Add Product', tcgplayer: '+ Add TCGPlayer', graded: '+ Add Graded', portfolio: '+ Add Item' };
+  const labels = { products: '+ Add to Watchlist', tcgplayer: '+ Add TCGPlayer', graded: '+ Add Graded', portfolio: '+ Add Item' };
   const addBtn = document.getElementById('add-btn');
   if (labels[tab]) {
     addBtn.textContent = labels[tab];
@@ -4644,7 +4644,7 @@ function renderOverview() {
   const games = [...new Set((data.retailer_game || []).map(r => r.game).filter(Boolean))].sort();
   const gameSel = document.getElementById('overview-game-filter');
   const curGame = gameSel.value;
-  gameSel.innerHTML = '<option value="">All Games</option>' + games.map(g =>
+  gameSel.innerHTML = '<option value="">All Products</option>' + games.map(g =>
     `<option value="${esc(g)}" ${g===curGame?'selected':''}>${esc(g)}</option>`
   ).join('');
 
@@ -5353,7 +5353,7 @@ function renderHubGrid() {
   if (!grid) return;
 
   if (!hubEntries.length) {
-    grid.innerHTML = '<div class="empty-state"><strong>No products yet</strong><p>Click <em>+ Add Product</em> to create a product and link deals, retailers, and TCGPlayer data.</p></div>';
+    grid.innerHTML = '<div class="empty-state"><strong>No watched items yet</strong><p>Click <em>+ Add to Watchlist</em> to track a product across retailers, deals, and TCGPlayer data.</p></div>';
     return;
   }
 
@@ -5447,7 +5447,7 @@ function hubCardHTML(e) {
 function openHubModal(editId) {
   const entry = editId ? hubEntries.find(e => e.id === editId) : null;
   document.getElementById('hub-edit-id').value = editId || '';
-  document.getElementById('hub-modal-title').textContent = entry ? 'Edit Product' : 'Add Product';
+  document.getElementById('hub-modal-title').textContent = entry ? 'Edit Watched Item' : 'Add to Watchlist';
   document.getElementById('hub-name').value = entry ? entry.name : '';
   document.getElementById('hub-set').value = entry ? (entry.tags||{}).set || '' : '';
   document.getElementById('hub-product_type').value = entry ? (entry.tags||{}).product_type || '' : '';
