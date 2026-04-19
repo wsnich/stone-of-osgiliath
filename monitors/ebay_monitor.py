@@ -83,7 +83,7 @@ class EbaySoldResult:
             "low":      self.low,
             "high":     self.high,
             "by_grade": self.by_grade,
-            "sales":    self.sales[:50],
+            "sales":    self.sales,
         }
 
 
@@ -93,7 +93,7 @@ class EbayMonitor:
     # Public interface
     # ------------------------------------------------------------------
 
-    async def search_sold(self, query: str, max_results: int = 50,
+    async def search_sold(self, query: str, max_results: int = 200,
                           exclude_graded: bool = True) -> EbaySoldResult:
         """
         Search eBay sold listings for the given query.
@@ -152,7 +152,7 @@ class EbayMonitor:
 
         if category == "comic":
             # Use 130point.com for comics — better data, more marketplaces
-            raw_sold, raw_live = await self._fetch_130point(query, max_results=50)
+            raw_sold, raw_live = await self._fetch_130point(query, max_results=200)
 
             # Post-filter both lists by key terms
             must_match = []

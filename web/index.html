@@ -1999,6 +1999,9 @@ select.form-input option { background: var(--surface2); }
     <!-- Retailer breakdown -->
     <div id="overview-retailers" style="margin-bottom:16px"></div>
 
+    <!-- Timing patterns -->
+    <div id="overview-timing"></div>
+
     <!-- Product matrix -->
     <div id="overview-products"></div>
 
@@ -4728,6 +4731,95 @@ function renderOverview() {
       <div style="display:flex;gap:4px;flex-wrap:wrap">${retChips}</div>
     </div>`;
   }
+
+  // Timing heatmap — hour of day x retailer
+  const timing = data.timing || [];
+  const dow = data.day_of_week || [];
+  const timingRetailers = [...new Set(timing.map(t => t.retailer))];
+
+  // Filter by game if selected
+  const gameRetailers = new Set(rg.map(r => r.retailer));
+  const filteredTimingRetailers = gameFilter
+    ? timingRetailers.filter(r => gameRetailers.has(r))
+    : timingRetailers;
+
+  let timingHTML = `<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;margin-top:8px">RESTOCK TIMING PATTERNS</div>`;
+
+  if (filteredTimingRetailers.length) {
+    // Hour-of-day heatmap
+    timingHTML += `<div style="font-size:10px;color:var(--muted);margin-bottom:6px">Hour of Day (UTC) — darker = more sightings</div>`;
+    timingHTML += `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:9px;width:100%">`;
+    timingHTML += `<tr><td style="padding:2px 4px;font-weight:700;color:var(--muted)">Retailer</td>`;
+    for (let h = 0; h < 24; h++) timingHTML += `<td style="padding:2px 3px;text-align:center;color:var(--muted)">${h}</td>`;
+    timingHTML += `<td style="padding:2px 4px;color:var(--muted)">Peak</td></tr>`;
+
+    // Sort by total sightings
+    const retailerTotals = {};
+    for (const t of timing) retailerTotals[t.retailer] = (retailerTotals[t.retailer] || 0) + t.cnt;
+    const sortedRetailers2 = filteredTimingRetailers.sort((a, b) => (retailerTotals[b] || 0) - (retailerTotals[a] || 0)).slice(0, 10);
+
+    for (const ret of sortedRetailers2) {
+      const hours = {};
+      let maxCnt = 0;
+      for (const t of timing) {
+        if (t.retailer === ret) {
+          hours[t.hour] = t.cnt;
+          if (t.cnt > maxCnt) maxCnt = t.cnt;
+        }
+      }
+      const peakHour = Object.entries(hours).sort((a, b) => b[1] - a[1])[0];
+      timingHTML += `<tr><td style="padding:3px 4px;font-weight:600;color:var(--text);white-space:nowrap">${esc(ret)}</td>`;
+      for (let h = 0; h < 24; h++) {
+        const cnt = hours[h] || 0;
+        const intensity = maxCnt > 0 ? cnt / maxCnt : 0;
+        const bg = intensity > 0.7 ? 'rgba(166,227,161,0.6)' :
+                   intensity > 0.4 ? 'rgba(201,168,76,0.4)' :
+                   intensity > 0.1 ? 'rgba(201,168,76,0.15)' :
+                   cnt > 0 ? 'rgba(201,168,76,0.05)' : 'transparent';
+        timingHTML += `<td style="padding:2px 3px;text-align:center;background:${bg}" title="${ret} @ ${h}:00 — ${cnt} sightings">${cnt || ''}</td>`;
+      }
+      timingHTML += `<td style="padding:2px 4px;color:var(--green);font-weight:700">${peakHour ? peakHour[0] + ':00' : '—'}</td></tr>`;
+    }
+    timingHTML += `</table></div>`;
+
+    // Day-of-week chart
+    if (dow.length) {
+      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      timingHTML += `<div style="font-size:10px;color:var(--muted);margin:12px 0 6px">Day of Week</div>`;
+      timingHTML += `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:9px;width:100%">`;
+      timingHTML += `<tr><td style="padding:2px 4px;font-weight:700;color:var(--muted)">Retailer</td>`;
+      for (const d of dayNames) timingHTML += `<td style="padding:2px 8px;text-align:center;color:var(--muted)">${d}</td>`;
+      timingHTML += `<td style="padding:2px 4px;color:var(--muted)">Best Day</td></tr>`;
+
+      for (const ret of sortedRetailers2) {
+        const days = {};
+        let maxD = 0;
+        for (const d of dow) {
+          if (d.retailer === ret) {
+            days[d.dow] = d.cnt;
+            if (d.cnt > maxD) maxD = d.cnt;
+          }
+        }
+        const peakDay = Object.entries(days).sort((a, b) => b[1] - a[1])[0];
+        timingHTML += `<tr><td style="padding:3px 4px;font-weight:600;color:var(--text);white-space:nowrap">${esc(ret)}</td>`;
+        for (let d = 0; d < 7; d++) {
+          const cnt = days[d] || 0;
+          const intensity = maxD > 0 ? cnt / maxD : 0;
+          const bg = intensity > 0.7 ? 'rgba(166,227,161,0.6)' :
+                     intensity > 0.4 ? 'rgba(201,168,76,0.4)' :
+                     intensity > 0.1 ? 'rgba(201,168,76,0.15)' :
+                     cnt > 0 ? 'rgba(201,168,76,0.05)' : 'transparent';
+          timingHTML += `<td style="padding:2px 8px;text-align:center;background:${bg}" title="${ret} on ${dayNames[d]} — ${cnt} sightings">${cnt || ''}</td>`;
+        }
+        timingHTML += `<td style="padding:2px 4px;color:var(--green);font-weight:700">${peakDay ? dayNames[peakDay[0]] : '—'}</td></tr>`;
+      }
+      timingHTML += `</table></div>`;
+    }
+  } else {
+    timingHTML += `<div style="color:var(--muted);font-size:11px">Not enough data yet for timing analysis.</div>`;
+  }
+
+  document.getElementById('overview-timing').innerHTML = timingHTML;
 
   document.getElementById('overview-products').innerHTML = prodHTML;
 }

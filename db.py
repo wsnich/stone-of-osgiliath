@@ -341,11 +341,24 @@ async def get_retailer_overview() -> dict:
         """) as cur:
             timing = [dict(r) for r in await cur.fetchall()]
 
+        # Day-of-week patterns
+        async with db.execute("""
+            SELECT retailer,
+                   CAST(strftime('%w', timestamp) AS INTEGER) as dow,
+                   COUNT(*) as cnt
+            FROM retailer_sightings
+            WHERE timestamp != ''
+            GROUP BY retailer, dow
+            ORDER BY retailer, dow
+        """) as cur:
+            day_of_week = [dict(r) for r in await cur.fetchall()]
+
         return {
             "retailer_game": retailer_game,
             "product_retailers": product_retailers,
             "recent": recent,
             "timing": timing,
+            "day_of_week": day_of_week,
         }
 
 

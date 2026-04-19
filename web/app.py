@@ -455,8 +455,8 @@ async def monitor_loop():
                                         pass
 
                                 # Apply learned ignore patterns to new sales + live
-                                sales = ebay_result.sales[:50]
-                                live  = ebay_result.live[:50]
+                                sales = ebay_result.sales
+                                live  = ebay_result.live
                                 await app_state.update_product(i,
                                     checking=False, last_checked=ts,
                                     ebay_sales=sales,
@@ -563,7 +563,7 @@ async def monitor_loop():
                             ebay_result = await _ebay.check_single(cfg["products"][i], stealth_cfg)
                             if ebay_result.count > 0:
                                 await app_state.update_product(i,
-                                    ebay_sales=ebay_result.sales[:50],
+                                    ebay_sales=ebay_result.sales,
                                 )
                                 # Re-apply ignore patterns to fresh sales
                                 _apply_ignore_patterns(ps)
