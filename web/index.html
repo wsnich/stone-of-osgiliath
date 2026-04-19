@@ -4625,6 +4625,13 @@ function editPortfolioItem(id) {
 
 let _overviewData = null;
 
+function toggleTimingMode() {
+  const btn = document.getElementById('timing-mode-toggle');
+  const mode = btn.dataset.mode === 'absolute' ? 'percent' : 'absolute';
+  btn.dataset.mode = mode;
+  renderOverview();
+}
+
 async function loadOverview() {
   try {
     const res = await fetch('/api/retailer-overview');
@@ -4768,7 +4775,11 @@ function renderOverview() {
     ? timingRetailers.filter(r => gameRetailers.has(r))
     : timingRetailers;
 
-  let timingHTML = `<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;margin-top:8px">RESTOCK TIMING PATTERNS</div>`;
+  const timingMode = document.getElementById('timing-mode-toggle')?.dataset?.mode || 'absolute';
+  let timingHTML = `<div style="display:flex;align-items:center;gap:10px;margin:8px 0 8px">
+    <span style="font-size:12px;font-weight:600;color:var(--muted)">RESTOCK TIMING PATTERNS</span>
+    <button class="btn btn-ghost btn-sm" id="timing-mode-toggle" data-mode="${timingMode}" onclick="toggleTimingMode()" style="font-size:10px;padding:2px 8px">${timingMode === 'absolute' ? 'Show %' : 'Show #s'}</button>
+  </div>`;
 
   if (filteredTimingRetailers.length) {
     // Hour-of-day heatmap
@@ -4786,9 +4797,11 @@ function renderOverview() {
     for (const ret of sortedRetailers2) {
       const hours = {};
       let maxCnt = 0;
+      let retTotal = 0;
       for (const t of timing) {
         if (t.retailer === ret) {
           hours[t.hour] = t.cnt;
+          retTotal += t.cnt;
           if (t.cnt > maxCnt) maxCnt = t.cnt;
         }
       }
@@ -4796,12 +4809,14 @@ function renderOverview() {
       timingHTML += `<tr><td style="padding:3px 4px;font-weight:600;color:var(--text);white-space:nowrap">${esc(ret)}</td>`;
       for (let h = 0; h < 24; h++) {
         const cnt = hours[h] || 0;
+        const pct = retTotal > 0 ? (cnt / retTotal * 100) : 0;
         const intensity = maxCnt > 0 ? cnt / maxCnt : 0;
         const bg = intensity > 0.7 ? 'rgba(166,227,161,0.6)' :
                    intensity > 0.4 ? 'rgba(201,168,76,0.4)' :
                    intensity > 0.1 ? 'rgba(201,168,76,0.15)' :
                    cnt > 0 ? 'rgba(201,168,76,0.05)' : 'transparent';
-        timingHTML += `<td style="padding:2px 3px;text-align:center;background:${bg}" title="${ret} @ ${h}:00 — ${cnt} sightings">${cnt || ''}</td>`;
+        const display = timingMode === 'percent' ? (pct > 0 ? pct.toFixed(0) + '%' : '') : (cnt || '');
+        timingHTML += `<td style="padding:2px 3px;text-align:center;background:${bg}" title="${ret} @ ${h}:00 — ${cnt} sightings (${pct.toFixed(1)}%)">${display}</td>`;
       }
       timingHTML += `<td style="padding:2px 4px;color:var(--green);font-weight:700">${peakHour ? peakHour[0] + ':00' : '—'}</td></tr>`;
     }
@@ -4819,9 +4834,11 @@ function renderOverview() {
       for (const ret of sortedRetailers2) {
         const days = {};
         let maxD = 0;
+        let retDowTotal = 0;
         for (const d of dow) {
           if (d.retailer === ret) {
             days[d.dow] = d.cnt;
+            retDowTotal += d.cnt;
             if (d.cnt > maxD) maxD = d.cnt;
           }
         }
@@ -4829,12 +4846,14 @@ function renderOverview() {
         timingHTML += `<tr><td style="padding:3px 4px;font-weight:600;color:var(--text);white-space:nowrap">${esc(ret)}</td>`;
         for (let d = 0; d < 7; d++) {
           const cnt = days[d] || 0;
+          const pct = retDowTotal > 0 ? (cnt / retDowTotal * 100) : 0;
           const intensity = maxD > 0 ? cnt / maxD : 0;
           const bg = intensity > 0.7 ? 'rgba(166,227,161,0.6)' :
                      intensity > 0.4 ? 'rgba(201,168,76,0.4)' :
                      intensity > 0.1 ? 'rgba(201,168,76,0.15)' :
                      cnt > 0 ? 'rgba(201,168,76,0.05)' : 'transparent';
-          timingHTML += `<td style="padding:2px 8px;text-align:center;background:${bg}" title="${ret} on ${dayNames[d]} — ${cnt} sightings">${cnt || ''}</td>`;
+          const dowDisplay = timingMode === 'percent' ? (pct > 0 ? pct.toFixed(0) + '%' : '') : (cnt || '');
+          timingHTML += `<td style="padding:2px 8px;text-align:center;background:${bg}" title="${ret} on ${dayNames[d]} — ${cnt} sightings (${pct.toFixed(1)}%)">${dowDisplay}</td>`;
         }
         timingHTML += `<td style="padding:2px 4px;color:var(--green);font-weight:700">${peakDay ? dayNames[peakDay[0]] : '—'}</td></tr>`;
       }
