@@ -6126,6 +6126,8 @@ function prependDiscordPost(post) {
   renderDiscordFeed();
   document.getElementById('discord-section').style.display = '';
   if (post.is_new) notifyDiscordPost(post);
+  // Auto-refresh audit log if Options panel is open
+  if (_discordOptsVisible) searchDiscordLog();
 }
 
 function _getField(fields, ...names) {
