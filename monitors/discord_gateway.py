@@ -325,9 +325,9 @@ class DiscordGatewayMonitor:
                 print(f"  [Discord GW] Failed to open tab for {ch_id}: {e}")
 
     async def _init_page_polling(self, page, channel_id: str):
-        """Initialize the seen-message set on a page."""
+        """Initialize the seen-message set on a page and extract channel name."""
         try:
-            await page.evaluate("""(chId) => {
+            result = await page.evaluate("""(chId) => {
                 window._gwSeenIds = new Set();
                 window._gwDebug = [];
                 window._gwChannelId = chId;
@@ -336,7 +336,15 @@ class DiscordGatewayMonitor:
                     let id = el.id.replace('chat-messages-', '');
                     if (id) window._gwSeenIds.add(id);
                 }
+                // Extract channel name from the header
+                let nameEl = document.querySelector('h1[class*="title_"]') ||
+                             document.querySelector('[class*="channelName_"]') ||
+                             document.querySelector('h1');
+                let name = nameEl ? nameEl.textContent.trim().replace(/^#/, '') : '';
+                return { name: name };
             }""", channel_id)
+            if result and result.get("name"):
+                self.channel_names[channel_id] = result["name"]
         except Exception:
             pass
 
