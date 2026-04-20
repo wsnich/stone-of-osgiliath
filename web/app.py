@@ -735,14 +735,11 @@ async def monitor_loop():
                         prev_count = len(prev_lp)
                         dom_qty = result.tcg_quantity or 0  # "N Listings" from DOM header
 
-                        # The DOM quantity is the most reliable count — if we captured
-                        # significantly fewer listings than the DOM reports, it's a
-                        # partial capture. Also catch sudden drops vs previous.
                         is_partial = False
-                        if dom_qty > 15 and new_count < dom_qty * 0.7:
-                            is_partial = True  # got less than 70% of DOM-reported listings
-                        elif prev_count > 15 and new_count < prev_count * 0.6:
-                            is_partial = True  # dropped more than 40% from previous
+                        if dom_qty > 10 and new_count < dom_qty * 0.85:
+                            is_partial = True  # got less than 85% of DOM-reported listings
+                        elif prev_count > 10 and new_count < prev_count * 0.80:
+                            is_partial = True  # dropped more than 20% from previous
 
                         if is_partial and prev_count > new_count:
                             await app_state.log("warn",

@@ -4241,18 +4241,21 @@ function renderHistogramData(listingPrices, opts = {}) {
 // ── Histogram trend + snapshot playback ─────────────────────────
 
 function _snapStats(listingPrices) {
-  // Compute median, low, listings, totalQty from a snapshot's listing_prices
+  // Compute median, low (5th percentile), listings, totalQty from a snapshot
   const all = listingPrices.map(x => typeof x === 'number' ? {price: x, qty: 1} : x).filter(x => x.price != null);
   if (!all.length) return null;
   all.sort((a, b) => a.price - b.price);
   const prices = [];
-  for (const r of all) for (let j = 0; j < (r.qty || 1); j++) prices.push(r.price);
+  for (const r of all) for (let j = 0; j < (r.qty || 1); j++) prices.push(r.total || r.price);
   prices.sort((a, b) => a - b);
   const median = prices.length % 2 === 0
     ? (prices[prices.length/2-1] + prices[prices.length/2]) / 2
     : prices[Math.floor(prices.length/2)];
+  // Use 5th percentile as "low" to exclude outliers (10th if small sample)
+  const pctIdx = Math.max(0, Math.floor(prices.length * (prices.length < 50 ? 0.10 : 0.05)));
+  const low = prices[pctIdx];
   return {
-    low: all[0].price,
+    low,
     median,
     listings: all.length,
     totalQty: all.reduce((s, r) => s + (r.qty || 1), 0),
