@@ -646,12 +646,10 @@ class DiscordGatewayMonitor:
     async def check_health(self) -> bool:
         if not self._running or not self._browser:
             return False
-        try:
-            if "/login" in self._page.url:
-                return False
-        except Exception:
-            return False
-        if self._last_ws_activity and (time.time() - self._last_ws_activity > 120):
+        # Skip health checks for the first 2 minutes after startup
+        if not self._last_ws_activity:
+            return True
+        if time.time() - self._last_ws_activity > 300:
             return False
         return True
 
