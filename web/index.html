@@ -2819,23 +2819,10 @@ function showDealToast(d) {
 
 // ── Deal notifications ──────────────────────────────────────────
 
-function requestNotifyPermission() {
-  if ('Notification' in window && Notification.permission === 'default') {
-    Notification.requestPermission();
-  }
-}
+function requestNotifyPermission() {}
 
 function showDealNotification(d) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  try {
-    const n = new Notification('The Stone of Osgiliath — Deal Found!', {
-      body: `${d.product_name}\n$${d.price.toFixed(2)} (limit $${d.max_price.toFixed(2)})`,
-      tag:  `deal-${d.product_name}-${Date.now()}`,
-      requireInteraction: true,
-      silent: false,
-    });
-    n.onclick = () => { window.open(d.url, '_blank'); window.focus(); n.close(); };
-  } catch (_) {}
+  // Desktop notifications disabled — using Discord DM notifications instead
 }
 
 function showRestockAlert(d) {
@@ -2850,17 +2837,6 @@ function showRestockAlert(d) {
   container.appendChild(toast);
   setTimeout(() => toast.remove(), 20000);
 
-  // Desktop notification
-  if ('Notification' in window && Notification.permission === 'granted') {
-    try {
-      const n = new Notification('The Stone of Osgiliath — Back In Stock!', {
-        body: `${d.product_name}${d.price ? ` — $${d.price.toFixed(2)}` : ''}`,
-        tag: `restock-${d.product_name}-${Date.now()}`,
-        requireInteraction: true,
-      });
-      n.onclick = () => { window.open(d.url, '_blank'); window.focus(); n.close(); };
-    } catch (_) {}
-  }
 
   // Sound — triple ascending chime (more urgent than deal chime)
   playDealSound();
@@ -6778,11 +6754,7 @@ function updateDiscordExpandBtn() {
 }
 
 function notifyDiscordPost(post) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const body = post.content.substring(0, 100) + (post.price ? ` — $${post.price.toFixed(2)}` : '');
-  try {
-    new Notification('Discord — deal alert', { body, tag: `discord-${post.id}` });
-  } catch (_) {}
+  // Desktop notifications disabled — using Discord DM notifications instead
 }
 
 // ── Proxy health ────────────────────────────────────────────────

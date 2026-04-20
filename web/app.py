@@ -398,7 +398,9 @@ async def discord_gateway_loop():
                     pass
 
             # Health check
-            if not await _discord_gw.check_health():
+            health = await _discord_gw.check_health()
+            if not health:
+                print(f"  [Discord GW] Health check FAILED: running={_discord_gw._running}, browser={bool(_discord_gw._browser)}, activity={_discord_gw._last_ws_activity}")
                 await app_state.log("warn", "Discord Gateway unhealthy — restarting...", "discord")
                 await app_state.ws.broadcast({"type": "discord_gateway_status", "data": {"state": "reconnecting"}})
                 ok = await _discord_gw.restart(config, stealth_cfg)
@@ -413,6 +415,7 @@ async def discord_gateway_loop():
             await _discord_gw.stop()
             raise
         except Exception as e:
+            print(f"  [Discord GW] Loop error: {e}")
             await app_state.log("warn", f"Discord gateway error: {e}", "discord")
 
         await asyncio.sleep(3)
