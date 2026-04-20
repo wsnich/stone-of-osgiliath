@@ -6073,39 +6073,40 @@ let discordPosts = [];
 let _discordExpanded = false;
 const DISCORD_PREVIEW = 25;
 
-async function initDiscordFeed(posts) {
+function initDiscordFeed(posts) {
   discordPosts = posts || [];
-
-  // Pre-load channel names
-  await loadDiscordChannels();
-
-  // Load recent shown messages from the audit log
-  if (!discordPosts.length) {
-    try {
-      const resp = await fetch('/api/discord/log?action=shown&limit=50');
-      const data = await resp.json();
-      const rows = data.rows || data || [];
-      for (const r of rows.reverse()) {
-        discordPosts.push({
-          id: r.msg_id || r.id || '',
-          author: r.author || '',
-          content: r.content || '',
-          timestamp: r.timestamp || r.logged_at || '',
-          keywords: [],
-          price: r.price,
-          embeds: r.embed_title ? [{
-            title: r.embed_title,
-            description: '',
-            fields: _parseEmbedFieldsToList(r.embed_fields || ''),
-          }] : [],
-          channel_name: _channelNameCache[r.channel_id] || (r.channel_id ? ('##' + r.channel_id.slice(-4)) : ''),
-        });
-      }
-    } catch(e) { console.warn('Failed to load discord history:', e); }
-  }
-
-  renderDiscordFeed();
   document.getElementById('discord-section').style.display = '';
+
+  // Load channel names then backfill from audit log if no live posts
+  loadDiscordChannels().then(() => {
+    if (discordPosts.length) {
+      renderDiscordFeed();
+      return;
+    }
+    fetch('/api/discord/log?action=shown&limit=50')
+      .then(r => r.json())
+      .then(data => {
+        const rows = data.rows || data || [];
+        for (const r of rows.reverse()) {
+          discordPosts.push({
+            id: r.msg_id || r.id || '',
+            author: r.author || '',
+            content: r.content || '',
+            timestamp: r.timestamp || r.logged_at || '',
+            keywords: [],
+            price: r.price,
+            embeds: r.embed_title ? [{
+              title: r.embed_title,
+              description: '',
+              fields: _parseEmbedFieldsToList(r.embed_fields || ''),
+            }] : [],
+            channel_name: _channelNameCache[r.channel_id] || (r.channel_id ? ('##' + r.channel_id.slice(-4)) : ''),
+          });
+        }
+        renderDiscordFeed();
+      })
+      .catch(e => console.warn('Failed to load discord history:', e));
+  });
 }
 
 function _parseEmbedFieldsToList(raw) {
