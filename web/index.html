@@ -1681,36 +1681,17 @@ select.form-input option { background: var(--surface2); }
           Discord <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9660;</span>
         </div>
         <div class="settings-body" style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-          <div>
-            <label class="form-label">Monitoring Method</label>
-            <select class="form-input" id="set-discord-method" onchange="toggleDiscordMethodFields()" style="font-size:10px">
-              <option value="gateway">Browser Gateway (recommended)</option>
-              <option value="rest">REST API polling (legacy)</option>
-            </select>
-          </div>
-          <div id="discord-gateway-fields">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <div>
-                <label class="form-label">Discord Email</label>
-                <input type="email" class="form-input" id="set-discord-email" placeholder="your@email.com" style="font-size:10px">
-              </div>
-              <div>
-                <label class="form-label">Discord Password</label>
-                <input type="password" class="form-input" id="set-discord-password" placeholder="Password" style="font-size:10px">
-              </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Discord Email</label>
+              <input type="email" class="form-input" id="set-discord-email" placeholder="your@email.com" style="font-size:10px">
             </div>
-            <div style="font-size:9px;color:var(--muted);margin-top:2px">Logs into Discord web in a headless browser. Looks like a normal browser session. Requires restart.</div>
-          </div>
-          <div id="discord-rest-fields" style="display:none">
-            <label class="form-label">User Token <span style="color:var(--muted);font-weight:400">for reading channels</span></label>
-            <input type="password" class="form-input" id="set-user-token" placeholder="Your Discord user token" style="font-size:10px">
-            <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px">
-              <div>
-                <label class="form-label">Poll Interval (s) <span style="color:var(--muted);font-weight:400">10-120</span></label>
-                <input type="number" class="form-input" id="set-discord-poll" min="10" max="120" value="30">
-              </div>
+            <div>
+              <label class="form-label">Discord Password</label>
+              <input type="password" class="form-input" id="set-discord-password" placeholder="Password" style="font-size:10px">
             </div>
           </div>
+          <div style="font-size:9px;color:var(--muted);margin-top:2px">Logs into Discord web in a headless browser. Looks like a normal browser session. Requires restart.</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
               <label class="form-label">Bot Token <span style="color:var(--muted);font-weight:400">for DM notifications</span></label>
@@ -3145,12 +3126,6 @@ async function toggleProduct(i, enabled) {
 
 // ── Settings ─────────────────────────────────────────────────
 
-function toggleDiscordMethodFields() {
-  const method = document.getElementById('set-discord-method').value;
-  document.getElementById('discord-gateway-fields').style.display = method === 'gateway' ? '' : 'none';
-  document.getElementById('discord-rest-fields').style.display = method === 'rest' ? '' : 'none';
-}
-
 function toggleSettingsSection(name) {
   const section = document.querySelector(`.settings-section[data-section="${name}"]`);
   if (!section) return;
@@ -3181,14 +3156,11 @@ async function openSettingsModal() {
   document.getElementById('set-mp-buy').value = (data.marketplace_buy_channels || []).join(', ');
   document.getElementById('set-reddit-subs').value = (data.reddit_subreddits || []).join(', ');
   document.getElementById('set-reddit-poll').value = data.reddit_poll_interval || 60;
-  document.getElementById('set-user-token').value = data.user_token || '';
-  document.getElementById('set-discord-poll').value = data.discord_poll_interval || 30;
+  // user_token and poll_interval removed (Gateway mode only)
   document.getElementById('set-bot-token').value = data.bot_token || '';
   document.getElementById('set-dm-user-id').value = data.dm_user_id || '';
-  document.getElementById('set-discord-method').value = data.discord_method || 'rest';
   document.getElementById('set-discord-email').value = data.discord_email || '';
   document.getElementById('set-discord-password').value = data.discord_password || '';
-  toggleDiscordMethodFields();
   document.getElementById('set-research-enabled').checked = data.research_enabled || false;
   document.getElementById('set-research-api-key').value = data.research_api_key || '';
   document.getElementById('set-research-interval').value = data.research_interval_hours || 168;
@@ -3237,11 +3209,9 @@ async function saveSettingsModal() {
     marketplace_buy_channels: document.getElementById('set-mp-buy').value.trim(),
     reddit_subreddits: document.getElementById('set-reddit-subs').value.trim(),
     reddit_poll_interval: parseInt(document.getElementById('set-reddit-poll').value) || 60,
-    user_token: document.getElementById('set-user-token').value.trim(),
-    discord_poll_interval: parseInt(document.getElementById('set-discord-poll').value) || 30,
+    // user_token and poll_interval removed (Gateway mode only)
     bot_token: document.getElementById('set-bot-token').value.trim(),
     dm_user_id: document.getElementById('set-dm-user-id').value.trim(),
-    discord_method: document.getElementById('set-discord-method').value,
     discord_email: document.getElementById('set-discord-email').value.trim(),
     discord_password: document.getElementById('set-discord-password').value.trim(),
     research_enabled: document.getElementById('set-research-enabled').checked,
@@ -7034,17 +7004,19 @@ setInterval(() => {
       <h2 style="font-size:15px;color:var(--text);margin:0 0 12px">Welcome! Let's get you set up.</h2>
       <p style="font-size:12px;color:var(--muted);line-height:1.5;margin:0 0 16px">
         This tool monitors Discord channels for deals on trading card games and collectibles.
-        To get started, you'll need a Discord user token so the app can read deal channels.
+        To get started, enter your Discord login so the app can monitor deal channels in real-time.
       </p>
 
-      <!-- Step 1: Discord Token -->
+      <!-- Step 1: Discord Login -->
       <div style="margin-bottom:16px">
-        <label style="font-size:12px;font-weight:700;color:var(--text);display:block;margin-bottom:6px">1. Discord User Token <span style="color:var(--red)">*required</span></label>
+        <label style="font-size:12px;font-weight:700;color:var(--text);display:block;margin-bottom:6px">1. Discord Login <span style="color:var(--red)">*required</span></label>
         <p style="font-size:11px;color:var(--muted);margin:0 0 6px;line-height:1.4">
-          Open Discord in your browser → F12 → Network tab → type "messages" in filter → click any channel →
-          click a request → Headers → copy the <b>Authorization</b> value.
+          Enter your Discord email and password. The app logs into Discord web in a headless browser to monitor deal channels in real-time.
         </p>
-        <input type="password" class="form-input" id="wizard-token" placeholder="Paste your Discord user token here" style="width:100%">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <input type="email" class="form-input" id="wizard-email" placeholder="Discord email" style="font-size:11px">
+          <input type="password" class="form-input" id="wizard-password" placeholder="Discord password" style="font-size:11px">
+        </div>
       </div>
 
       <!-- Step 2: Channel -->
@@ -7105,21 +7077,22 @@ function skipSetupWizard() {
 }
 
 async function submitSetupWizard() {
-  const token = document.getElementById('wizard-token').value.trim();
+  const email = document.getElementById('wizard-email').value.trim();
+  const password = document.getElementById('wizard-password').value.trim();
   const channel = document.getElementById('wizard-channel').value.trim();
   const botToken = document.getElementById('wizard-bot-token').value.trim();
   const userId = document.getElementById('wizard-user-id').value.trim();
   const subs = document.getElementById('wizard-subreddits').value.trim();
 
-  if (!token) {
-    alert('Discord user token is required to monitor deal channels.');
+  if (!email || !password) {
+    alert('Discord email and password are required to monitor deal channels.');
     return;
   }
 
   // Save settings
   const body = {
-    user_token: token,
-    discord_poll_interval: 30,
+    discord_email: email,
+    discord_password: password,
   };
   if (botToken) body.bot_token = botToken;
   if (userId) body.dm_user_id = userId;
@@ -7150,7 +7123,7 @@ async function submitSetupWizard() {
   });
 
   document.getElementById('setup-wizard').style.display = 'none';
-  alert('Setup complete! The app will start monitoring on the next poll cycle. You may need to restart for Discord to begin polling.');
+  alert('Setup complete! Restart the app for Discord Gateway monitoring to begin.');
 }
 
 // ── Research Agent ──────────────────────────────────────────────────

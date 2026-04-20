@@ -192,302 +192,8 @@ def _make_reddit_entry(p: dict, subreddit: str, is_new: bool) -> dict:
 
 
 # ------------------------------------------------------------------
-# Discord feed poller
+# Discord Gateway monitor
 # ------------------------------------------------------------------
-
-_marketplace_seen: set[str] = set()
-_marketplace_initialized = False
-
-async def marketplace_poll_loop():
-    """Polls marketplace (BST) channels for buy/sell listings."""
-    global _marketplace_seen, _marketplace_initialized
-    import aiohttp
-
-    await asyncio.sleep(12)
-
-    while True:
-        try:
-            config = load_config()
-            mp_cfg = config.get("marketplace", {})
-            if not mp_cfg.get("enabled"):
-                await asyncio.sleep(60)
-                continue
-
-            token = config.get("discord", {}).get("token", "")
-            if not token:
-                await asyncio.sleep(60)
-                continue
-
-            sell_channels = mp_cfg.get("sell_channels", [])
-            buy_channels = mp_cfg.get("buy_channels", [])
-            all_channels = [(ch, "WTS") for ch in sell_channels] + [(ch, "WTB") for ch in buy_channels]
-
-            if not all_channels:
-                await asyncio.sleep(60)
-                continue
-
-            # Build product name list for matching
-            product_names = []
-            for ps in app_state.product_statuses:
-                if ps.site == "tcgplayer":
-                    words = set(re.findall(r'\w{3,}', ps.name.lower()))
-                    product_names.append({"index": ps.index, "name": ps.name, "words": words})
-
-            headers = {"Authorization": token, "Content-Type": "application/json"}
-
-            async with aiohttp.ClientSession() as session:
-                for ch_id, default_intent in all_channels:
-                    try:
-                        url = f"https://discord.com/api/v10/channels/{ch_id}/messages?limit=25"
-                        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                            if resp.status != 200:
-                                continue
-                            msgs = await resp.json()
-
-                        for msg in msgs:
-                            mid = msg.get("id", "")
-                            if mid in _marketplace_seen:
-                                continue
-                            _marketplace_seen.add(mid)
-
-                            if not _marketplace_initialized:
-                                continue
-
-                            content = msg.get("content", "")
-                            if not content or is_noise(content):
-                                continue
-
-                            author = msg.get("author", {})
-                            intent = parse_intent(content) or default_intent
-                            items = extract_prices(content)
-
-                            if not items:
-                                continue
-
-                            # Match against tracked products
-                            matched = match_to_products(items, product_names)
-
-                            # Build jump URL
-                            guild_id = msg.get("guild_id", "")
-                            # We may not have guild_id from the message API — construct anyway
-                            jump_url = f"https://discord.com/channels/{guild_id}/{ch_id}/{mid}" if guild_id else f"https://discord.com/channels/@me/{ch_id}/{mid}"
-
-                            listing = MarketplaceListing(
-                                seller=author.get("username", "unknown"),
-                                seller_id=author.get("id", ""),
-                                intent=intent,
-                                raw_text=content[:500],
-                                items=matched if matched else items[:5],
-                                msg_id=mid,
-                                channel_id=ch_id,
-                                timestamp=msg.get("timestamp", ""),
-                                jump_url=jump_url,
-                            )
-
-                            # Store in DB
-                            await price_db.record_marketplace_message(
-                                msg_id=mid, channel_id=ch_id,
-                                seller=listing.seller, seller_id=listing.seller_id,
-                                intent=intent, raw_text=content[:1000],
-                                items_json=json.dumps(items),
-                                matched_json=json.dumps(matched),
-                                timestamp=msg.get("timestamp", ""),
-                            )
-
-                            # Broadcast matched listings
-                            if matched:
-                                await app_state.ws.broadcast({
-                                    "type": "marketplace_listing",
-                                    "data": listing.to_dict(),
-                                })
-
-                                # DM notification for deals below market
-                                dm_user = config.get("discord", {}).get("dm_user_id")
-                                bot_token = config.get("discord", {}).get("bot_token", "")
-                                dm_token = f"Bot {bot_token}" if bot_token else token
-                                if dm_user and dm_token and intent == "WTS":
-                                    for item in matched:
-                                        pi = item.get("product_index")
-                                        if pi is not None and pi < len(app_state.product_statuses):
-                                            ps = app_state.product_statuses[pi]
-                                            if ps.price and item["price"] < ps.price * 0.85:
-                                                pct = ((item["price"] - ps.price) / ps.price) * 100
-                                                dm_msg = (
-                                                    f"🏪 **Marketplace Deal**\n"
-                                                    f"**{item.get('product_name', item['name'])}**\n"
-                                                    f"Seller: @{listing.seller} — **${item['price']:.2f}** "
-                                                    f"({pct:+.0f}% vs TCG ${ps.price:.2f})\n"
-                                                    f"[Jump to message]({jump_url})"
-                                                )
-                                                await _discord.send_dm(dm_token, dm_user, dm_msg)
-
-                                await app_state.log("info",
-                                    f"Marketplace: @{listing.seller} {intent} {len(matched)} matched item(s)",
-                                    "marketplace")
-
-                    except Exception as e:
-                        log.debug(f"Marketplace channel {ch_id}: {e}")
-
-            if not _marketplace_initialized:
-                _marketplace_initialized = True
-                await app_state.log("info", f"Marketplace monitor initialized — {len(all_channels)} channels", "marketplace")
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            await app_state.log("warn", f"Marketplace poll error: {e}", "marketplace")
-
-        poll_interval = config.get("marketplace", {}).get("poll_interval_seconds", 30)
-        await asyncio.sleep(max(10, poll_interval))
-
-
-async def discord_poll_loop():
-    """Polls configured Discord channels every 30 seconds for new messages."""
-    await asyncio.sleep(8)  # let everything else start first
-
-    config = load_config()
-    dc = config.get("discord", {})
-    if not dc.get("enabled"):
-        return
-
-    await app_state.log("info", "Discord monitor starting...", "discord")
-
-    while True:
-        try:
-            config = load_config()
-            new_msgs = await _discord.poll(config)
-
-            deals_changed = False
-            for msg in new_msgs:
-                entry = {
-                    "id":       msg["id"],
-                    "author":   msg["author"],
-                    "content":  msg["content"],
-                    "timestamp": msg["timestamp"],
-                    "keywords": msg.get("matched_keywords", []),
-                    "price":    msg.get("price"),
-                    "embeds":   msg.get("embeds", []),
-                    "channel_name": msg.get("channel_name", ""),
-                    "is_new":   True,
-                }
-                app_state.discord_posts.appendleft(entry)
-                await app_state.ws.broadcast({"type": "discord_post", "data": entry})
-
-                # Ingest into deal tracker (aggregate by product)
-                tracked = deal_tracker.ingest(entry)
-                if tracked:
-                    deals_changed = True
-                    await app_state.ws.broadcast({
-                        "type": "tracked_deal_update",
-                        "data": tracked.to_dict(),
-                    })
-
-                    # Send Discord DM notification for new deals
-                    dm_user = config.get("discord", {}).get("dm_user_id")
-                    bot_token = config.get("discord", {}).get("bot_token", "")
-                    dm_token = f"Bot {bot_token}" if bot_token else token
-                    if dm_user and dm_token:
-                        title = entry.get("embeds", [{}])[0].get("title", "") if entry.get("embeds") else entry.get("content", "")[:80]
-                        price = entry.get("price")
-                        price_str = f"${price:.2f}" if price else "no price"
-                        # Build deal score if we have TCGPlayer data
-                        score_str = ""
-                        if price:
-                            from web.state import _normalize_name, _tokenize, _jaccard
-                            title_norm = _normalize_name(title)
-                            title_tokens = _tokenize(title_norm)
-                            best_match = None
-                            best_score = 0.0
-                            for ps in app_state.product_statuses:
-                                if ps.site != "tcgplayer" or ps.price is None:
-                                    continue
-                                ps_tokens = _tokenize(_normalize_name(ps.name))
-                                sc = _jaccard(title_tokens, ps_tokens)
-                                if sc > best_score and sc >= 0.35:
-                                    best_score = sc
-                                    best_match = ps
-                            if best_match:
-                                pct = ((price - best_match.price) / best_match.price) * 100
-                                score_str = f" ({pct:+.0f}% vs TCG ${best_match.price:.2f})"
-
-                        # Extract URL
-                        url = ""
-                        for e in entry.get("embeds", []):
-                            if e.get("url"):
-                                url = e["url"]
-                                break
-
-                        dm_msg = f"🔔 **Deal Alert**\n{title}\n**{price_str}**{score_str}"
-                        if url:
-                            dm_msg += f"\n🔗 {url}"
-                        # Include checkout links
-                        from web.state import _extract_checkout_links
-                        cart_links = _extract_checkout_links(entry)
-                        for cl in cart_links[:3]:
-                            dm_msg += f"\n🛒 [{cl['label']}]({cl['url']})"
-                        await _discord.send_dm(dm_token, dm_user, dm_msg)
-
-                kw_str = ", ".join(msg.get("matched_keywords", []))
-                price_str = f" — ${msg['price']:.2f}" if msg.get("price") else ""
-                await app_state.log(
-                    "info",
-                    f"[{msg['author']}] {msg['content'][:80]}{price_str} ({kw_str})",
-                    "discord",
-                )
-
-            if deals_changed:
-                deal_tracker.save_to_disk()
-                # Auto-assign new deals to the single best matching hub product
-                from web.state import _normalize_name, _tokenize, _jaccard
-                hub_changed = False
-                for deal in deal_tracker.deals:
-                    # Skip if already assigned to any product
-                    if any(deal.id in e.deal_ids for e in product_hub.entries):
-                        continue
-                    best_entry = None
-                    best_score = 0.0
-                    for entry in product_hub.entries:
-                        entry_norm = _normalize_name(entry.name)
-                        entry_tokens = _tokenize(entry_norm)
-                        if not entry_tokens:
-                            continue
-                        score = _jaccard(deal.tokens, entry_tokens)
-                        if score > best_score:
-                            best_score = score
-                            best_entry = entry
-                    if best_entry and best_score >= 0.55:
-                        best_entry.deal_ids.append(deal.id)
-                        hub_changed = True
-                if hub_changed:
-                    product_hub.save_to_disk()
-
-            # Save ALL messages (shown + filtered) to audit log + retailer intelligence
-            for entry in getattr(_discord, '_audit_log', []):
-                try:
-                    await price_db.log_discord_message(
-                        msg_id=entry["msg_id"], channel_id=entry["channel_id"],
-                        author=entry["author"], content=entry["content"],
-                        embed_title=entry.get("embed_title", ""),
-                        embed_fields=entry.get("embed_fields", ""),
-                        price=entry.get("price"),
-                        action=entry["action"], reason=entry["reason"],
-                        timestamp=entry.get("timestamp", ""),
-                    )
-                except Exception:
-                    pass
-                # Ingest into retailer intelligence
-                try:
-                    await _ingest_retailer_sighting(entry)
-                except Exception:
-                    pass
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            await app_state.log("warn", f"Discord poll error: {e}", "discord")
-
-        poll_interval = config.get("discord", {}).get("poll_interval_seconds", 30)
-        await asyncio.sleep(max(10, poll_interval))
 
 
 async def discord_gateway_loop():
@@ -1211,19 +917,8 @@ async def lifespan(app: FastAPI):
     reddit_task  = asyncio.create_task(reddit_poll_loop())
     research_task = asyncio.create_task(research_loop())
 
-    # Choose Discord monitoring method: "gateway" (browser) or "rest" (legacy API polling)
-    discord_method = config.get("discord", {}).get("method", "rest")
-    if discord_method == "gateway" and config.get("discord", {}).get("email"):
-        discord_task = asyncio.create_task(discord_gateway_loop())
-        marketplace_task = asyncio.create_task(marketplace_gateway_loop())
-        print("  Discord: using Gateway (browser WebSocket) mode")
-    else:
-        discord_task = asyncio.create_task(discord_poll_loop())
-        marketplace_task = asyncio.create_task(marketplace_poll_loop())
-        if discord_method == "gateway":
-            print("  Discord: Gateway mode selected but no email configured, falling back to REST")
-        else:
-            print("  Discord: using REST API polling mode")
+    discord_task = asyncio.create_task(discord_gateway_loop())
+    marketplace_task = asyncio.create_task(marketplace_gateway_loop())
 
     app_state._monitor_task = task
     app_state._reddit_task  = reddit_task
@@ -1782,8 +1477,9 @@ async def get_discord_channels():
     token = dc.get("token", "")
     result = []
     for ch_id in channels:
-        name = await _discord.resolve_channel_name(token, str(ch_id)) if token else f"#{ch_id[-4:]}"
-        result.append({"id": str(ch_id), "name": name})
+        cid = str(ch_id)
+        name = _discord_gw.channel_names.get(cid) or _discord._channel_names.get(cid) or f"#{cid[-4:]}"
+        result.append({"id": cid, "name": name})
     return {"channels": result}
 
 @app.post("/api/discord/channels/add")
@@ -1796,10 +1492,7 @@ async def add_discord_channel(body: dict):
     if ch_id not in channels:
         channels.append(ch_id)
         save_config(config)
-        # Resolve name
-        token = config["discord"].get("token", "")
-        if token:
-            await _discord.resolve_channel_name(token, ch_id)
+        # Channel name will be resolved from Gateway READY/GUILD_CREATE events
     return {"status": "ok"}
 
 @app.post("/api/discord/channels/remove")
@@ -2245,17 +1938,14 @@ async def get_settings():
         "schedule_start":        schedule.get("start", "07:00"),
         "schedule_end":          schedule.get("end", "23:00"),
         "data_dir":              config.get("data_dir") or "",
-        "user_token":           config.get("discord", {}).get("token") or "",
         "graded_interval_hours": round(config.get("graded_interval_seconds", 7 * 86400) / 3600),
         "marketplace_enabled":     config.get("marketplace", {}).get("enabled", False),
         "marketplace_sell_channels": config.get("marketplace", {}).get("sell_channels", []),
         "marketplace_buy_channels":  config.get("marketplace", {}).get("buy_channels", []),
         "reddit_subreddits":    config.get("reddit", {}).get("subreddits", ["sealedmtgdeals"]),
         "reddit_poll_interval": config.get("reddit", {}).get("poll_interval_seconds", 60),
-        "discord_poll_interval": config.get("discord", {}).get("poll_interval_seconds", 30),
         "bot_token":            config.get("discord", {}).get("bot_token") or "",
         "dm_user_id":           config.get("discord", {}).get("dm_user_id") or "",
-        "discord_method":       config.get("discord", {}).get("method", "rest"),
         "discord_email":        config.get("discord", {}).get("email") or "",
         "discord_password":     config.get("discord", {}).get("password") or "",
         "research_enabled":      research.get("enabled", False),
@@ -2292,8 +1982,6 @@ async def update_settings(body: dict):
         sc["end"] = body["schedule_end"]
     if "data_dir" in body:
         config["data_dir"] = body["data_dir"].strip() or None
-    if "discord_poll_interval" in body:
-        config.setdefault("discord", {})["poll_interval_seconds"] = max(10, min(120, int(body["discord_poll_interval"])))
     if "graded_interval_hours" in body:
         config["graded_interval_seconds"] = max(1, int(body["graded_interval_hours"])) * 3600
     if "marketplace_enabled" in body:
@@ -2315,18 +2003,10 @@ async def update_settings(body: dict):
         config.setdefault("reddit", {})["subreddits"] = subs
     if "reddit_poll_interval" in body:
         config.setdefault("reddit", {})["poll_interval_seconds"] = max(30, min(300, int(body["reddit_poll_interval"])))
-    if "user_token" in body:
-        token_val = body["user_token"].strip()
-        config.setdefault("discord", {})["token"] = token_val or None
-        # Auto-enable Discord when a real token is provided
-        if token_val and "YOUR_" not in token_val:
-            config["discord"]["enabled"] = True
     if "bot_token" in body:
         config.setdefault("discord", {})["bot_token"] = body["bot_token"].strip() or None
     if "dm_user_id" in body:
         config.setdefault("discord", {})["dm_user_id"] = body["dm_user_id"].strip() or None
-    if "discord_method" in body:
-        config.setdefault("discord", {})["method"] = body["discord_method"]
     if "discord_email" in body:
         config.setdefault("discord", {})["email"] = body["discord_email"].strip() or None
     if "discord_password" in body:
