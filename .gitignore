@@ -12,6 +12,9 @@ portfolio.json
 # Cached images
 web/images/
 
+# Research agent output (logs, reports, run metadata)
+research/output/
+
 # Python
 __pycache__/
 *.pyc

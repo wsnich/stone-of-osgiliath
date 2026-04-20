@@ -68,14 +68,37 @@ class DiscordMonitor:
         for p in config.get("products", []):
             tags = p.get("tags", {})
             cat = tags.get("category", "")
+            # Singles/comics: only auto-generate keywords if opted in
             if cat in ("single", "comic"):
-                continue
+                if not tags.get("notify_on_discord", False):
+                    continue
             s = tags.get("set", "")
             pt = tags.get("product_type", "")
             if s and s.lower() not in keywords and s.lower() not in disabled:
                 keywords.append(s.lower())
             if pt and pt.lower() not in keywords and pt.lower() not in disabled:
                 keywords.append(pt.lower())
+            # For opted-in singles, also add the product name as a keyword
+            if cat in ("single", "comic") and tags.get("notify_on_discord"):
+                name_kw = re.sub(r'[^\w\s]', '', p.get("name", "")).lower().strip()
+                if name_kw and name_kw not in keywords and name_kw not in disabled:
+                    keywords.append(name_kw)
+
+        # Build watchlist product token sets for ignore-pattern bypass
+        watchlist_token_sets = []
+        for p in config.get("products", []):
+            tags = p.get("tags", {})
+            if tags.get("category") in ("single", "comic"):
+                continue  # singles handled by opt-in above
+            parts = [p.get("name", "")]
+            if tags.get("set"):
+                parts.append(tags["set"])
+            if tags.get("product_type"):
+                parts.append(tags["product_type"])
+            combined = re.sub(r'[^\w\s]', '', " ".join(parts)).lower()
+            words = set(w for w in combined.split() if len(w) >= 3)
+            if words:
+                watchlist_token_sets.append(words)
 
         if not token or not channels:
             return []
@@ -139,11 +162,21 @@ class DiscordMonitor:
                     "timestamp": msg.get("timestamp", ""),
                 }
 
-                # Check ignored patterns
+                # Check ignored patterns — but bypass if message matches a watchlist product
                 matched_ignore = [p for p in ignored_patterns if p in full_text]
                 if matched_ignore:
-                    filtered_messages.append({**log_entry, "action": "filtered", "reason": f"ignored pattern: {matched_ignore[0]}"})
-                    continue
+                    # Check if this message matches any watchlist product (Jaccard >= 0.40)
+                    msg_words = set(w for w in re.sub(r'[^\w\s]', '', full_text).split() if len(w) >= 3)
+                    watchlist_hit = False
+                    for wl_words in watchlist_token_sets:
+                        overlap = len(msg_words & wl_words)
+                        total = len(msg_words | wl_words)
+                        if total > 0 and overlap / total >= 0.40:
+                            watchlist_hit = True
+                            break
+                    if not watchlist_hit:
+                        filtered_messages.append({**log_entry, "action": "filtered", "reason": f"ignored pattern: {matched_ignore[0]}"})
+                        continue
 
                 # Check blocked retailers (by URL domain in embeds)
                 if blocked_retailers:

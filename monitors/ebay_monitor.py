@@ -141,13 +141,20 @@ class EbayMonitor:
                 if last_name.lower() not in name_lower:
                     parts.append(last_name)
         else:
-            # MTG singles: include set and foil
+            # MTG singles/sealed: include set and foil
             if tags.get("set") and tags["set"].lower() not in name.lower():
                 parts.append(tags["set"])
             if tags.get("printing") and tags["printing"].lower() == "foil":
                 parts.append("foil")
 
         query = " ".join(parts)
+
+        # Disambiguate for single booster packs vs boxes/cases
+        product_type = tags.get("product_type", "").lower()
+        if "pack" in product_type and "box" not in product_type:
+            query += " -box -case -lot sealed"
+        elif "collector" in name.lower() and "box" not in product_type:
+            query += " sealed -graded"
         log.info(f"eBay sold search: {query[:60]}")
 
         if category == "comic":

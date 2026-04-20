@@ -161,10 +161,13 @@ def match_to_products(items: list[dict], product_names: list[dict]) -> list[dict
                 best_score = score
                 best_match = prod
 
-        if best_match and best_score >= 0.30:
-            item['product_index'] = best_match['index']
-            item['product_name'] = best_match['name']
-            item['match_score'] = round(best_score, 2)
-            matched.append(item)
+        if best_match and best_score >= 0.50:
+            overlap_count = len(item_words & best_match['words'])
+            min_overlap = 3 if len(item_words) > 2 else len(item_words)
+            if overlap_count >= min_overlap:
+                item['product_index'] = best_match['index']
+                item['product_name'] = best_match['name']
+                item['match_score'] = round(best_score, 2)
+                matched.append(item)
 
     return matched

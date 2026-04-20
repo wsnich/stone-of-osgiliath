@@ -1667,134 +1667,197 @@ select.form-input option { background: var(--surface2); }
 
 <!-- ── Settings modal ───────────────────────────────────────── -->
 <div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)closeSettingsModal()" style="display:none">
-  <div class="modal" style="max-width:520px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+  <div class="modal" style="max-width:520px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0">
       <div class="modal-title" style="margin-bottom:0">Settings</div>
       <button class="btn btn-ghost btn-sm" onclick="closeSettingsModal()">&#10005;</button>
     </div>
 
-    <div style="display:flex;flex-direction:column;gap:12px">
+    <div style="overflow-y:auto;flex:1;padding-right:4px" id="settings-scroll">
 
-      <!-- Monitor -->
-      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px">Monitor</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <label class="form-label">Check Interval (seconds)</label>
-          <input type="number" class="form-input" id="set-interval" min="60" max="86400" value="300">
+      <!-- Discord -->
+      <div class="settings-section" data-section="discord" style="margin-bottom:2px">
+        <div onclick="toggleSettingsSection('discord')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          Discord <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9660;</span>
         </div>
-        <div>
-          <label class="form-label">Jitter %</label>
-          <input type="number" class="form-input" id="set-jitter" min="0" max="50" value="20">
+        <div class="settings-body" style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
+          <div>
+            <label class="form-label">User Token <span style="color:var(--muted);font-weight:400">for reading channels</span></label>
+            <input type="password" class="form-input" id="set-user-token" placeholder="Your Discord user token" style="font-size:10px">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Poll Interval (s) <span style="color:var(--muted);font-weight:400">10-120</span></label>
+              <input type="number" class="form-input" id="set-discord-poll" min="10" max="120" value="30">
+            </div>
+            <div>
+              <label class="form-label">Bot Token <span style="color:var(--muted);font-weight:400">for DM notifications</span></label>
+              <input type="password" class="form-input" id="set-bot-token" placeholder="Bot token" style="font-size:10px">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">
+            <div>
+              <label class="form-label">DM User ID <span style="color:var(--muted);font-weight:400">right-click yourself in Discord</span></label>
+              <input type="text" class="form-input" id="set-dm-user-id" placeholder="Your Discord User ID" style="font-size:10px">
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="testDiscordDM()" style="font-size:10px;white-space:nowrap;height:32px">Test DM</button>
+          </div>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:8px;align-items:center">
-        <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
-          <input type="checkbox" id="set-schedule-enabled"> Active hours
-        </label>
-        <input type="time" class="form-input" id="set-schedule-start" value="07:00" style="padding:4px 6px">
-        <input type="time" class="form-input" id="set-schedule-end" value="23:00" style="padding:4px 6px">
+
+      <!-- Monitor -->
+      <div class="settings-section" data-section="monitor" style="margin-bottom:2px">
+        <div onclick="toggleSettingsSection('monitor')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          Monitor &amp; Schedule <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
+        </div>
+        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Check Interval (seconds)</label>
+              <input type="number" class="form-input" id="set-interval" min="60" max="86400" value="300">
+            </div>
+            <div>
+              <label class="form-label">Jitter %</label>
+              <input type="number" class="form-input" id="set-jitter" min="0" max="50" value="20">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:auto 1fr 1fr;gap:8px;align-items:center">
+            <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+              <input type="checkbox" id="set-schedule-enabled"> Active hours
+            </label>
+            <input type="time" class="form-input" id="set-schedule-start" value="07:00" style="padding:4px 6px">
+            <input type="time" class="form-input" id="set-schedule-end" value="23:00" style="padding:4px 6px">
+          </div>
+          <div>
+            <label class="form-label">Graded Check Interval (hours) <span style="color:var(--muted);font-weight:400">default 168 = 7 days</span></label>
+            <input type="number" class="form-input" id="set-graded-interval" min="1" max="720" value="168" style="width:100px">
+          </div>
+        </div>
       </div>
 
       <!-- Browser -->
-      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Browser</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <label class="form-label">User Agent</label>
-          <input type="text" class="form-input" id="set-user-agent" placeholder="Default (Chrome 124)" style="font-size:10px">
+      <div class="settings-section" data-section="browser" style="margin-bottom:2px">
+        <div onclick="toggleSettingsSection('browser')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          Browser <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
-        <div>
-          <label class="form-label">Browser Channel</label>
-          <select class="form-input" id="set-browser-channel">
-            <option value="">Auto-detect</option>
-            <option value="chrome">Chrome</option>
-            <option value="msedge">Microsoft Edge</option>
-          </select>
+        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">User Agent</label>
+              <input type="text" class="form-input" id="set-user-agent" placeholder="Default (Chrome 124)" style="font-size:10px">
+            </div>
+            <div>
+              <label class="form-label">Browser Channel</label>
+              <select class="form-input" id="set-browser-channel">
+                <option value="">Auto-detect</option>
+                <option value="chrome">Chrome</option>
+                <option value="msedge">Microsoft Edge</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Page Timeout (ms)</label>
+              <input type="number" class="form-input" id="set-page-timeout" min="5000" max="120000" value="30000">
+            </div>
+            <div>
+              <label class="form-label">Network Timeout (s)</label>
+              <input type="number" class="form-input" id="set-network-timeout" min="5" max="120" value="15">
+            </div>
+          </div>
+          <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" id="set-headless" checked> Headless mode (no visible browser)
+          </label>
         </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <label class="form-label">Page Timeout (ms)</label>
-          <input type="number" class="form-input" id="set-page-timeout" min="5000" max="120000" value="30000">
-        </div>
-        <div>
-          <label class="form-label">Network Timeout (s)</label>
-          <input type="number" class="form-input" id="set-network-timeout" min="5" max="120" value="15">
-        </div>
-      </div>
-      <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
-        <input type="checkbox" id="set-headless" checked> Headless mode (no visible browser)
-      </label>
-
-      <!-- Graded -->
-      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Graded</div>
-      <div>
-        <label class="form-label">Check Interval (hours) <span style="color:var(--muted);font-weight:400">default 168 = 7 days</span></label>
-        <input type="number" class="form-input" id="set-graded-interval" min="1" max="720" value="168" style="width:100px">
       </div>
 
       <!-- Marketplace -->
-      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Marketplace (BST Channels)</div>
-      <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
-        <input type="checkbox" id="set-mp-enabled"> Enable marketplace monitoring
-      </label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <label class="form-label">Sell Channel IDs <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
-          <input type="text" class="form-input" id="set-mp-sell" placeholder="Channel ID(s)" style="font-size:10px">
+      <div class="settings-section" data-section="marketplace" style="margin-bottom:2px">
+        <div onclick="toggleSettingsSection('marketplace')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          Marketplace (BST) <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
-        <div>
-          <label class="form-label">Buy Channel IDs <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
-          <input type="text" class="form-input" id="set-mp-buy" placeholder="Channel ID(s)" style="font-size:10px">
+        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" id="set-mp-enabled"> Enable marketplace monitoring
+          </label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Sell Channel IDs <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
+              <input type="text" class="form-input" id="set-mp-sell" placeholder="Channel ID(s)" style="font-size:10px">
+            </div>
+            <div>
+              <label class="form-label">Buy Channel IDs <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
+              <input type="text" class="form-input" id="set-mp-buy" placeholder="Channel ID(s)" style="font-size:10px">
+            </div>
+          </div>
         </div>
       </div>
 
       <!-- Reddit -->
-      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Reddit</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <label class="form-label">Subreddits <span style="color:var(--muted);font-weight:400">comma-separated, blank to disable</span></label>
-          <input type="text" class="form-input" id="set-reddit-subs" placeholder="sealedmtgdeals, pokemontcg" style="font-size:10px">
+      <div class="settings-section" data-section="reddit" style="margin-bottom:2px">
+        <div onclick="toggleSettingsSection('reddit')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          Reddit <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
-        <div>
-          <label class="form-label">Poll Interval (seconds) <span style="color:var(--muted);font-weight:400">min 30</span></label>
-          <input type="number" class="form-input" id="set-reddit-poll" min="30" max="300" value="60">
+        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Subreddits <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
+              <input type="text" class="form-input" id="set-reddit-subs" placeholder="sealedmtgdeals, pokemontcg" style="font-size:10px">
+            </div>
+            <div>
+              <label class="form-label">Poll Interval (s) <span style="color:var(--muted);font-weight:400">min 30</span></label>
+              <input type="number" class="form-input" id="set-reddit-poll" min="30" max="300" value="60">
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Discord -->
-      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Discord</div>
-      <div>
-        <label class="form-label">User Token <span style="color:var(--muted);font-weight:400">for reading Discord channels</span></label>
-        <input type="password" class="form-input" id="set-user-token" placeholder="Your Discord user token" style="font-size:10px">
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div>
-          <label class="form-label">Poll Interval (seconds) <span style="color:var(--muted);font-weight:400">min 10, max 120</span></label>
-          <input type="number" class="form-input" id="set-discord-poll" min="10" max="120" value="30">
+      <!-- Research -->
+      <div class="settings-section" data-section="research" style="margin-bottom:2px">
+        <div onclick="toggleSettingsSection('research')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          Research Agent <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
-        <div>
-          <label class="form-label">Bot Token <span style="color:var(--muted);font-weight:400">for sending DM notifications</span></label>
-          <input type="password" class="form-input" id="set-bot-token" placeholder="Bot token" style="font-size:10px">
+        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" id="set-research-enabled"> Enable scheduled research runs
+          </label>
+          <div>
+            <label class="form-label">Anthropic API Key</label>
+            <input type="password" class="form-input" id="set-research-api-key" placeholder="sk-ant-..." style="font-size:10px">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Run Interval (hours) <span style="color:var(--muted);font-weight:400">168 = weekly</span></label>
+              <input type="number" class="form-input" id="set-research-interval" min="1" max="720" value="168">
+            </div>
+            <div>
+              <label class="form-label">Lookback Days</label>
+              <input type="number" class="form-input" id="set-research-lookback" min="1" max="90" value="7">
+            </div>
+            <div>
+              <label class="form-label">Max Findings</label>
+              <input type="number" class="form-input" id="set-research-max-findings" min="1" max="20" value="7">
+            </div>
+          </div>
         </div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">
-        <div>
-          <label class="form-label">DM Notifications <span style="color:var(--muted);font-weight:400">Your Discord User ID</span></label>
-          <input type="text" class="form-input" id="set-dm-user-id" placeholder="Right-click yourself → Copy User ID" style="font-size:10px">
-        </div>
-        <button class="btn btn-ghost btn-sm" onclick="testDiscordDM()" style="font-size:10px;white-space:nowrap;height:32px">Test DM</button>
       </div>
 
       <!-- Data -->
-      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding-bottom:4px;margin-top:4px">Data</div>
-      <div>
-        <label class="form-label">Data Directory <span style="color:var(--muted);font-weight:400">(blank = project root, requires restart)</span></label>
-        <input type="text" class="form-input" id="set-data-dir" placeholder="Default (project root)" style="font-size:10px">
+      <div class="settings-section" data-section="data" style="margin-bottom:2px">
+        <div onclick="toggleSettingsSection('data')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          Data <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
+        </div>
+        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div>
+            <label class="form-label">Data Directory <span style="color:var(--muted);font-weight:400">(blank = project root, requires restart)</span></label>
+            <input type="text" class="form-input" id="set-data-dir" placeholder="Default (project root)" style="font-size:10px">
+          </div>
+        </div>
       </div>
 
     </div>
 
-    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;padding-top:10px;border-top:1px solid var(--border);flex-shrink:0">
       <button class="btn btn-ghost btn-sm" onclick="closeSettingsModal()">Cancel</button>
       <button class="btn btn-primary btn-sm" onclick="saveSettingsModal()">Save</button>
     </div>
@@ -1895,6 +1958,7 @@ select.form-input option { background: var(--surface2); }
         <button class="tab-btn" id="tab-graded" onclick="switchTab('graded')">Graded</button>
         <button class="tab-btn" id="tab-portfolio" onclick="switchTab('portfolio')">Portfolio</button>
         <button class="tab-btn" id="tab-intelligence" onclick="switchTab('intelligence')">Intelligence</button>
+        <button class="tab-btn" id="tab-research" onclick="switchTab('research')">Research</button>
       </div>
       <button class="btn btn-primary btn-sm" id="add-btn" onclick="handleAddBtn()" style="display:none">+ Add Product</button>
     </div>
@@ -2022,6 +2086,38 @@ select.form-input option { background: var(--surface2); }
     <div id="overview-products"></div>
 
     </div><!-- /panel-intelligence -->
+
+    <!-- ── Research tab ───────────────────────────────────── -->
+    <div class="tab-panel" id="panel-research">
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="font-size:12px;color:var(--muted)">AI Research Agent — analyzes your data and recommends features</span>
+      <span id="research-status-badge" style="display:none;font-size:10px;padding:2px 8px;border-radius:8px;background:var(--accent);color:#000;margin-left:8px">Running...</span>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <select id="research-filter" onchange="renderFindings()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:2px 6px">
+          <option value="">All Findings</option>
+          <option value="new">New</option>
+          <option value="accepted">Accepted</option>
+          <option value="rejected">Rejected</option>
+          <option value="implemented">Implemented</option>
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="triggerResearchRun()" id="research-run-btn" style="font-size:10px;padding:3px 10px">Run Now</button>
+      </div>
+    </div>
+
+    <!-- Run history summary -->
+    <div id="research-runs-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px"></div>
+
+    <!-- Findings list -->
+    <div id="research-findings-list">
+      <div class="empty-state">
+        <strong>No research findings yet</strong>
+        <p>The research agent analyzes your price history, Discord logs, and marketplace data to recommend features and improvements.</p>
+        <p style="font-size:11px;color:var(--muted)">Configure your Anthropic API key in Settings > Research, then click <em>Run Now</em> or enable the scheduled weekly run.</p>
+      </div>
+    </div>
+
+    </div><!-- /panel-research -->
 
   </div>
 
@@ -2466,16 +2562,33 @@ function connectWS() {
         hubEntries = msg.data;
         renderHubGrid();
         break;
+      case 'research_complete':
+        updateResearchStatus(false);
+        if (_activeTab === 'research') loadResearch();
+        break;
+      case 'research_error':
+        updateResearchStatus(false);
+        console.error('Research run failed:', msg.error);
+        break;
     }
   };
 }
 
 connectWS();
 
+// Hide Research tab until we confirm API key exists
+document.getElementById('tab-research').style.display = 'none';
+(async () => {
+  try {
+    const s = await (await fetch('/api/settings')).json();
+    if (s.research_api_key) document.getElementById('tab-research').style.display = '';
+  } catch(e) {}
+})();
+
 // Restore tab from URL hash after reload
 if (window.location.hash) {
   const tab = window.location.hash.slice(1);
-  if (['deals','products','tcgplayer','graded','portfolio','intelligence'].includes(tab)) switchTab(tab);
+  if (['deals','products','tcgplayer','graded','portfolio','intelligence','research'].includes(tab)) switchTab(tab);
   history.replaceState(null, '', window.location.pathname);
 }
 
@@ -3009,6 +3122,16 @@ async function toggleProduct(i, enabled) {
 
 // ── Settings ─────────────────────────────────────────────────
 
+function toggleSettingsSection(name) {
+  const section = document.querySelector(`.settings-section[data-section="${name}"]`);
+  if (!section) return;
+  const body = section.querySelector('.settings-body');
+  const chevron = section.querySelector('.settings-chevron');
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'flex';
+  chevron.innerHTML = isOpen ? '&#9654;' : '&#9660;';
+}
+
 async function openSettingsModal() {
   const res = await fetch('/api/settings');
   const data = await res.json();
@@ -3033,6 +3156,11 @@ async function openSettingsModal() {
   document.getElementById('set-discord-poll').value = data.discord_poll_interval || 30;
   document.getElementById('set-bot-token').value = data.bot_token || '';
   document.getElementById('set-dm-user-id').value = data.dm_user_id || '';
+  document.getElementById('set-research-enabled').checked = data.research_enabled || false;
+  document.getElementById('set-research-api-key').value = data.research_api_key || '';
+  document.getElementById('set-research-interval').value = data.research_interval_hours || 168;
+  document.getElementById('set-research-lookback').value = data.research_lookback_days || 7;
+  document.getElementById('set-research-max-findings').value = data.research_max_findings || 7;
   document.getElementById('settings-modal').style.display = '';
   document.getElementById('settings-modal').classList.add('open');
 }
@@ -3080,12 +3208,19 @@ async function saveSettingsModal() {
     discord_poll_interval: parseInt(document.getElementById('set-discord-poll').value) || 30,
     bot_token: document.getElementById('set-bot-token').value.trim(),
     dm_user_id: document.getElementById('set-dm-user-id').value.trim(),
+    research_enabled: document.getElementById('set-research-enabled').checked,
+    research_api_key: document.getElementById('set-research-api-key').value.trim(),
+    research_interval_hours: parseInt(document.getElementById('set-research-interval').value) || 168,
+    research_lookback_days: parseInt(document.getElementById('set-research-lookback').value) || 7,
+    research_max_findings: parseInt(document.getElementById('set-research-max-findings').value) || 7,
   };
   await fetch('/api/settings', {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   });
+  // Show/hide Research tab based on API key
+  document.getElementById('tab-research').style.display = body.research_api_key ? '' : 'none';
   closeSettingsModal();
 }
 
@@ -3616,7 +3751,7 @@ let _activeTab = 'products';
 
 function switchTab(tab) {
   _activeTab = tab;
-  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence']) {
+  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence', 'research']) {
     document.getElementById(`tab-${t}`).classList.toggle('active', tab === t);
     document.getElementById(`panel-${t}`).classList.toggle('active', tab === t);
   }
@@ -3629,12 +3764,13 @@ function switchTab(tab) {
     addBtn.style.display = 'none';
   }
 
-  if (tab === 'deals')      renderTrackedDeals();
-  if (tab === 'products')   renderHubGrid();
-  if (tab === 'tcgplayer')  renderTcgGrid();
+  if (tab === 'deals')        renderTrackedDeals();
+  if (tab === 'products')     renderHubGrid();
+  if (tab === 'tcgplayer')    renderTcgGrid();
   if (tab === 'intelligence') loadOverview();
-  if (tab === 'graded')     renderComicsGrid();
-  if (tab === 'portfolio')  loadPortfolio();
+  if (tab === 'graded')       renderComicsGrid();
+  if (tab === 'portfolio')    loadPortfolio();
+  if (tab === 'research')     loadResearch();
 }
 
 // ── TCGPlayer rendering ─────────────────────────────────────────
@@ -6980,6 +7116,174 @@ async function submitSetupWizard() {
   document.getElementById('setup-wizard').style.display = 'none';
   alert('Setup complete! The app will start monitoring on the next poll cycle. You may need to restart for Discord to begin polling.');
 }
+
+// ── Research Agent ──────────────────────────────────────────────────
+
+let _researchFindings = [];
+let _researchRuns = [];
+
+async function loadResearch() {
+  try {
+    const [findings, runs, status] = await Promise.all([
+      fetch('/api/research/findings').then(r => r.json()),
+      fetch('/api/research/runs').then(r => r.json()),
+      fetch('/api/research/status').then(r => r.json()),
+    ]);
+    _researchFindings = findings;
+    _researchRuns = runs;
+    renderResearchRunsSummary();
+    renderFindings();
+    updateResearchStatus(status.running);
+  } catch (e) {
+    console.warn('Failed to load research data:', e);
+  }
+}
+
+function updateResearchStatus(running) {
+  const badge = document.getElementById('research-status-badge');
+  const btn = document.getElementById('research-run-btn');
+  if (running) {
+    badge.style.display = '';
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+  } else {
+    badge.style.display = 'none';
+    btn.disabled = false;
+    btn.textContent = 'Run Now';
+  }
+}
+
+function renderResearchRunsSummary() {
+  const el = document.getElementById('research-runs-summary');
+  if (!_researchRuns.length) { el.innerHTML = ''; return; }
+
+  const latest = _researchRuns[0];
+  const tokens = latest.tokens_used || {};
+  el.innerHTML = `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:140px">
+      <div style="font-size:10px;color:var(--muted)">Last Run</div>
+      <div style="font-size:14px;font-weight:600">${latest.timestamp ? latest.timestamp.replace('_', ' ') : 'N/A'}</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:140px">
+      <div style="font-size:10px;color:var(--muted)">Findings Written</div>
+      <div style="font-size:14px;font-weight:600">${latest.findings_written || 0}</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:140px">
+      <div style="font-size:10px;color:var(--muted)">Iterations</div>
+      <div style="font-size:14px;font-weight:600">${latest.iterations || 'N/A'}</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:140px">
+      <div style="font-size:10px;color:var(--muted)">Tokens Used</div>
+      <div style="font-size:14px;font-weight:600">${tokens.total ? tokens.total.toLocaleString() : 'N/A'}</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:140px">
+      <div style="font-size:10px;color:var(--muted)">Total Runs</div>
+      <div style="font-size:14px;font-weight:600">${_researchRuns.length}</div>
+    </div>
+  `;
+}
+
+function renderFindings() {
+  const el = document.getElementById('research-findings-list');
+  const filter = document.getElementById('research-filter').value;
+  let findings = _researchFindings;
+  if (filter) findings = findings.filter(f => f.status === filter);
+
+  if (!findings.length) {
+    el.innerHTML = `<div class="empty-state">
+      <strong>${filter ? 'No ' + filter + ' findings' : 'No research findings yet'}</strong>
+      <p>${filter ? 'Try a different filter.' : 'Click <em>Run Now</em> to start the research agent.'}</p>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = findings.map(f => {
+    let tags = [];
+    try { tags = JSON.parse(f.tags_json || '[]'); } catch(e) {}
+    let evidence = {};
+    try { evidence = JSON.parse(f.evidence_json || '{}'); } catch(e) {}
+
+    const confidenceColor = {low: '#888', medium: 'var(--accent)', high: '#4caf50'}[f.confidence] || 'var(--muted)';
+    const impactColor = {low: '#888', medium: 'var(--accent)', high: '#f44336'}[f.impact] || 'var(--muted)';
+    const statusColors = {new: 'var(--accent)', accepted: '#4caf50', rejected: '#888', implemented: '#2196f3'};
+    const statusColor = statusColors[f.status] || 'var(--muted)';
+
+    return `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:13px;font-weight:600;flex:1">${_esc(f.title)}</span>
+        <span style="font-size:9px;padding:2px 8px;border-radius:8px;background:${statusColor};color:#000;font-weight:600;text-transform:uppercase">${f.status}</span>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">
+        ${_esc(f.problem_statement)}
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-size:9px;padding:1px 6px;border-radius:4px;border:1px solid ${confidenceColor};color:${confidenceColor}">Confidence: ${f.confidence}</span>
+        <span style="font-size:9px;padding:1px 6px;border-radius:4px;border:1px solid ${impactColor};color:${impactColor}">Impact: ${f.impact}</span>
+        ${tags.map(t => `<span style="font-size:9px;padding:1px 6px;border-radius:4px;background:var(--surface3);color:var(--muted)">${_esc(t)}</span>`).join('')}
+      </div>
+      <details style="margin-bottom:8px">
+        <summary style="font-size:10px;color:var(--muted);cursor:pointer">Recommendation</summary>
+        <div style="font-size:11px;margin-top:4px;white-space:pre-wrap;color:var(--text)">${_esc(f.recommendation)}</div>
+      </details>
+      <details style="margin-bottom:8px">
+        <summary style="font-size:10px;color:var(--muted);cursor:pointer">Implementation Sketch</summary>
+        <div style="font-size:11px;margin-top:4px;white-space:pre-wrap;color:var(--text);font-family:monospace;background:var(--surface);padding:8px;border-radius:4px">${_esc(f.implementation_sketch)}</div>
+      </details>
+      <details style="margin-bottom:8px">
+        <summary style="font-size:10px;color:var(--muted);cursor:pointer">Evidence</summary>
+        <div style="font-size:10px;margin-top:4px;white-space:pre-wrap;color:var(--text);font-family:monospace;background:var(--surface);padding:8px;border-radius:4px;max-height:200px;overflow:auto">${_esc(JSON.stringify(evidence, null, 2))}</div>
+      </details>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="font-size:9px;color:var(--muted)">${f.created_at || ''}</span>
+        <div style="margin-left:auto;display:flex;gap:4px">
+          ${f.status !== 'accepted' ? `<button class="btn btn-ghost btn-sm" onclick="updateFindingStatus(${f.id}, 'accepted')" style="font-size:9px;padding:1px 8px;color:#4caf50">Accept</button>` : ''}
+          ${f.status !== 'rejected' ? `<button class="btn btn-ghost btn-sm" onclick="updateFindingStatus(${f.id}, 'rejected')" style="font-size:9px;padding:1px 8px;color:#888">Reject</button>` : ''}
+          ${f.status === 'accepted' ? `<button class="btn btn-ghost btn-sm" onclick="updateFindingStatus(${f.id}, 'implemented')" style="font-size:9px;padding:1px 8px;color:#2196f3">Mark Implemented</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function updateFindingStatus(id, status) {
+  await fetch(`/api/research/findings/${id}/status`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({status}),
+  });
+  // Update local state
+  const f = _researchFindings.find(f => f.id === id);
+  if (f) f.status = status;
+  renderFindings();
+}
+
+async function triggerResearchRun() {
+  const btn = document.getElementById('research-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+  try {
+    const res = await fetch('/api/research/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),
+    });
+    if (res.ok) {
+      updateResearchStatus(true);
+    } else {
+      const err = await res.json();
+      alert(err.detail || 'Failed to start research run');
+      btn.disabled = false;
+      btn.textContent = 'Run Now';
+    }
+  } catch(e) {
+    alert('Failed to start research run: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Run Now';
+  }
+}
+
+function _esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 </script>
 </body>
 </html>

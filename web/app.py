@@ -9,6 +9,7 @@ Monitor loop uses a per-product scheduler:
 
 import asyncio
 import json
+import os
 import random
 import re
 import sys
@@ -764,6 +765,10 @@ async def monitor_loop():
                         update_kwargs["tcg_quantity"] = result.tcg_quantity
                     if result.listing_prices:
                         update_kwargs["listing_prices"] = result.listing_prices
+                        # Compute 5th percentile market low to exclude outliers
+                        update_kwargs["tcg_market_low"] = _compute_market_low(
+                            result.listing_prices, result.low_price
+                        )
                     if result.tcg_sales:
                         update_kwargs["tcg_sales"] = result.tcg_sales
                     if result.tcg_price_history:
@@ -862,6 +867,7 @@ async def lifespan(app: FastAPI):
     reddit_task  = asyncio.create_task(reddit_poll_loop())
     discord_task = asyncio.create_task(discord_poll_loop())
     marketplace_task = asyncio.create_task(marketplace_poll_loop())
+    research_task = asyncio.create_task(research_loop())
     app_state._monitor_task = task
     app_state._reddit_task  = reddit_task
     yield
@@ -869,7 +875,7 @@ async def lifespan(app: FastAPI):
     deal_tracker.save_to_disk()
     product_hub.save_to_disk()
     app_state.monitor_running = False
-    for t in (task, reddit_task, discord_task, marketplace_task):
+    for t in (task, reddit_task, discord_task, marketplace_task, research_task):
         t.cancel()
         try:
             await t
@@ -1171,6 +1177,21 @@ def _learn_ignore_patterns(ps):
         ps.tags.pop("ignore_keywords", None)
 
 
+_RETAILER_CANONICAL = {
+    "bestbuy": "Best Buy", "best buy": "Best Buy",
+    "walmart": "Walmart",
+    "amazon": "Amazon",
+    "target": "Target",
+    "gamestop": "GameStop", "game stop": "GameStop",
+    "barnes & noble": "Barnes & Noble", "barnes and noble": "Barnes & Noble",
+    "tcgplayer": "TCGPlayer", "tcg player": "TCGPlayer",
+}
+
+def _normalize_retailer(raw: str) -> str:
+    """Normalize retailer name to canonical form."""
+    key = raw.strip().lower()
+    return _RETAILER_CANONICAL.get(key, raw.strip())
+
 async def _ingest_retailer_sighting(entry: dict) -> None:
     """Extract retailer intelligence from a Discord audit log entry and store it."""
     import re as _re
@@ -1208,10 +1229,11 @@ async def _ingest_retailer_sighting(entry: dict) -> None:
             elif 'walmart' in s: retailer = 'Walmart'
             elif 'target' in s: retailer = 'Target'
             elif 'best buy' in s: retailer = 'Best Buy'
-            else: retailer = seller_m.group(1).strip()
+            else: retailer = _normalize_retailer(seller_m.group(1))
 
     if not retailer:
         return
+    retailer = _normalize_retailer(retailer)
 
     asin_m = _re.search(r'(?:ASIN|SKU):\s*(?:```)?([A-Z0-9]{10})', fields)
     asin = asin_m.group(1) if asin_m else None
@@ -1240,6 +1262,27 @@ def _normalize_title(t: str) -> str:
     """Normalize an eBay title for fuzzy matching."""
     import re as _re
     return _re.sub(r'\s+', ' ', t.strip().lower())
+
+
+def _compute_market_low(listing_prices: list[dict], fallback_low: float | None) -> float | None:
+    """Compute 5th percentile from listing distribution to exclude outliers."""
+    if not listing_prices or len(listing_prices) < 5:
+        return fallback_low
+    try:
+        # Expand to individual prices weighted by quantity
+        expanded = []
+        for item in listing_prices:
+            p = item.get("total") or item.get("price", 0)
+            if p and p > 0:
+                expanded.extend([p] * max(1, item.get("qty", 1)))
+        if len(expanded) < 10:
+            return fallback_low
+        expanded.sort()
+        # 5th percentile (10th if small sample)
+        pct_idx = max(0, int(len(expanded) * (0.10 if len(expanded) < 50 else 0.05)))
+        return round(expanded[pct_idx], 2)
+    except Exception:
+        return fallback_low
 
 
 def _apply_ignore_patterns(ps):
@@ -1829,6 +1872,7 @@ async def get_settings():
     config   = load_config()
     stealth  = config.get("stealth",   {})
     schedule = config.get("schedule",  {})
+    research = config.get("research",  {})
     return {
         "check_interval_seconds": config.get("check_interval_seconds", 300),
         "jitter_pct":            stealth.get("jitter_pct", 20),
@@ -1851,6 +1895,11 @@ async def get_settings():
         "discord_poll_interval": config.get("discord", {}).get("poll_interval_seconds", 30),
         "bot_token":            config.get("discord", {}).get("bot_token") or "",
         "dm_user_id":           config.get("discord", {}).get("dm_user_id") or "",
+        "research_enabled":      research.get("enabled", False),
+        "research_api_key":      research.get("api_key") or "",
+        "research_interval_hours": research.get("interval_hours", 168),
+        "research_lookback_days":  research.get("lookback_days", 7),
+        "research_max_findings":   research.get("max_findings", 7),
     }
 
 @app.put("/api/settings")
@@ -1913,6 +1962,18 @@ async def update_settings(body: dict):
         config.setdefault("discord", {})["bot_token"] = body["bot_token"].strip() or None
     if "dm_user_id" in body:
         config.setdefault("discord", {})["dm_user_id"] = body["dm_user_id"].strip() or None
+    # Research agent settings
+    rc = config.setdefault("research", {})
+    if "research_enabled" in body:
+        rc["enabled"] = bool(body["research_enabled"])
+    if "research_api_key" in body:
+        rc["api_key"] = body["research_api_key"].strip() or None
+    if "research_interval_hours" in body:
+        rc["interval_hours"] = max(1, int(body["research_interval_hours"]))
+    if "research_lookback_days" in body:
+        rc["lookback_days"] = max(1, min(90, int(body["research_lookback_days"])))
+    if "research_max_findings" in body:
+        rc["max_findings"] = max(1, min(20, int(body["research_max_findings"])))
     save_config(config)
     await app_state.log("info", "Settings saved", "system")
     return {"status": "ok"}
@@ -2181,3 +2242,136 @@ async def delete_portfolio_item(item_id: int):
         item["id"] = i
     _save_portfolio(portfolio)
     return {"status": "ok"}
+
+# ------------------------------------------------------------------
+# Research Agent
+# ------------------------------------------------------------------
+
+_research_running = False
+
+@app.get("/api/research/findings")
+async def get_findings(status: str = "", limit: int = 50, offset: int = 0):
+    return await price_db.get_research_findings(status=status, limit=limit, offset=offset)
+
+@app.put("/api/research/findings/{finding_id}/status")
+async def update_finding(finding_id: int, body: dict):
+    new_status = body.get("status", "")
+    ok = await price_db.update_finding_status(finding_id, new_status)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Invalid status or finding not found")
+    return {"status": "ok"}
+
+@app.get("/api/research/runs")
+async def get_runs(limit: int = 20):
+    return await price_db.get_research_runs(limit=limit)
+
+@app.post("/api/research/run")
+async def trigger_research_run(body: dict = {}):
+    global _research_running
+    if _research_running:
+        raise HTTPException(status_code=409, detail="Research agent is already running")
+
+    config = load_config()
+    research_cfg = config.get("research", {})
+    db_path = str(price_db.DB_PATH)
+
+    from research.agent import ResearchRunConfig, run_research_async
+
+    cfg = ResearchRunConfig(
+        db_path=db_path,
+        lookback_days=body.get("lookback_days", research_cfg.get("lookback_days", 7)),
+        max_findings=body.get("max_findings", research_cfg.get("max_findings", 7)),
+        model=research_cfg.get("model", "claude-sonnet-4-5"),
+        api_key=research_cfg.get("api_key") or os.environ.get("ANTHROPIC_API_KEY"),
+        codebase_root=Path(__file__).parent.parent,
+    )
+
+    async def _run():
+        global _research_running
+        _research_running = True
+        try:
+            summary = await run_research_async(cfg)
+            print(f"  Research run complete: {summary.get('findings_written', 0)} findings")
+            await app_state.ws.broadcast({"type": "research_complete", "summary": summary})
+        except Exception as e:
+            print(f"  Research run failed: {e}")
+            await app_state.ws.broadcast({"type": "research_error", "error": str(e)})
+        finally:
+            _research_running = False
+
+    asyncio.create_task(_run())
+    return {"status": "started"}
+
+@app.get("/api/research/status")
+async def research_status():
+    return {"running": _research_running}
+
+
+async def research_loop():
+    """Background loop — runs research agent on a configurable schedule."""
+    await asyncio.sleep(60)  # Let app fully start before first check
+    while True:
+        try:
+            config = load_config()
+            research_cfg = config.get("research", {})
+            if not research_cfg.get("enabled", False):
+                await asyncio.sleep(3600)
+                continue
+
+            interval_hours = research_cfg.get("interval_hours", 168)  # default weekly
+            last_run = None
+
+            # Check last run time
+            runs = await price_db.get_research_runs(limit=1)
+            if runs:
+                from datetime import datetime as _dt
+                try:
+                    last_ts = runs[0].get("timestamp", "")
+                    last_run = _dt.strptime(last_ts, "%Y-%m-%d_%H%M%S")
+                except (ValueError, KeyError):
+                    pass
+
+            if last_run:
+                from datetime import timedelta as _td
+                next_run = last_run + _td(hours=interval_hours)
+                now = _dt.utcnow()
+                if now < next_run:
+                    wait_secs = min((next_run - now).total_seconds(), 3600)
+                    await asyncio.sleep(wait_secs)
+                    continue
+
+            # Time to run
+            global _research_running
+            if _research_running:
+                await asyncio.sleep(300)
+                continue
+
+            db_path = str(price_db.DB_PATH)
+            from research.agent import ResearchRunConfig, run_research_async
+
+            cfg = ResearchRunConfig(
+                db_path=db_path,
+                lookback_days=research_cfg.get("lookback_days", 7),
+                max_findings=research_cfg.get("max_findings", 7),
+                model=research_cfg.get("model", "claude-sonnet-4-5"),
+                api_key=research_cfg.get("api_key") or os.environ.get("ANTHROPIC_API_KEY"),
+                codebase_root=Path(__file__).parent.parent,
+            )
+
+            _research_running = True
+            try:
+                summary = await run_research_async(cfg)
+                print(f"  [Research] Scheduled run complete: {summary.get('findings_written', 0)} findings")
+                await app_state.ws.broadcast({"type": "research_complete", "summary": summary})
+            except Exception as e:
+                print(f"  [Research] Scheduled run failed: {e}")
+            finally:
+                _research_running = False
+
+            await asyncio.sleep(3600)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"  [Research] Loop error: {e}")
+            await asyncio.sleep(3600)

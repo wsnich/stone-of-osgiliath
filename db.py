@@ -17,6 +17,7 @@ price_history
   checked_at   TEXT     ISO-8601 UTC timestamp
 """
 
+import json
 import aiosqlite
 from pathlib import Path
 from typing import Optional
@@ -142,6 +143,26 @@ async def init_db() -> None:
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_mp_time ON marketplace_messages(timestamp)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_mp_seller ON marketplace_messages(seller)")
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS research_findings (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                title                 TEXT    NOT NULL,
+                problem_statement     TEXT    NOT NULL,
+                evidence_json         TEXT    NOT NULL,
+                recommendation        TEXT    NOT NULL,
+                implementation_sketch TEXT    NOT NULL,
+                confidence            TEXT    NOT NULL,
+                impact                TEXT    NOT NULL,
+                tags_json             TEXT    NOT NULL DEFAULT '[]',
+                status                TEXT    NOT NULL DEFAULT 'new',
+                run_id                TEXT,
+                created_at            TEXT    NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_rf_status ON research_findings(status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_rf_created ON research_findings(created_at)")
+
         await db.commit()
 
 # ---------------------------------------------------------------------------
@@ -657,3 +678,53 @@ async def get_stats(url: str) -> dict:
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else {}
+
+# ---------------------------------------------------------------------------
+# Research findings
+# ---------------------------------------------------------------------------
+
+async def get_research_findings(
+    status: str = "", limit: int = 50, offset: int = 0,
+) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        conditions, params = [], []
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.extend([limit, offset])
+        async with db.execute(
+            f"""SELECT * FROM research_findings {where}
+                ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+            params,
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def update_finding_status(finding_id: int, status: str) -> bool:
+    if status not in ("new", "accepted", "rejected", "implemented"):
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE research_findings SET status = ? WHERE id = ?",
+            (status, finding_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_research_runs(limit: int = 20) -> list[dict]:
+    """List past research runs from the output directory."""
+    import glob as _glob
+    output_dir = Path(__file__).parent / "research" / "output"
+    if not output_dir.exists():
+        return []
+    run_files = sorted(output_dir.glob("run_*.json"), reverse=True)[:limit]
+    runs = []
+    for f in run_files:
+        try:
+            runs.append(json.loads(f.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    return runs

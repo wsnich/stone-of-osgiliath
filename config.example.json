@@ -46,6 +46,15 @@
     "ignored_patterns": []
   },
 
+  "research": {
+    "enabled": false,
+    "api_key": "YOUR_ANTHROPIC_API_KEY_HERE",
+    "interval_hours": 168,
+    "lookback_days": 7,
+    "max_findings": 7,
+    "model": "claude-sonnet-4-5"
+  },
+
   "notifications": {
     "desktop": true,
     "sound": true

@@ -47,6 +47,7 @@ class ProductStatus:
     tags: dict = field(default_factory=dict)  # {retailer, set, product_type}
     # TCGPlayer reference data
     tcg_low_price: Optional[float] = None
+    tcg_market_low: Optional[float] = None  # 5th percentile from listing distribution
     tcg_quantity: Optional[int] = None
     # Listing prices (for histogram)
     listing_prices: Optional[list] = None
@@ -656,6 +657,7 @@ class AppState:
             ps.error              = s.get("error")
             ps.next_check_in      = s.get("next_check_in")
             ps.tcg_low_price      = s.get("tcg_low_price")
+            ps.tcg_market_low     = s.get("tcg_market_low")
             ps.tcg_quantity       = s.get("tcg_quantity")
             ps.tcg_sales          = s.get("tcg_sales")
             ps.tcg_price_history  = s.get("tcg_price_history")
