@@ -272,7 +272,11 @@ async def discord_gateway_loop():
 
                 # Use shared filtering pipeline
                 _discord._channel_names.update(_discord_gw.channel_names)
-                result, audit = _discord.filter_message(msg, config)
+                try:
+                    result, audit = _discord.filter_message(msg, config)
+                except Exception as e:
+                    print(f"  [Discord GW] Filter error: {e}")
+                    continue
                 # Patch channel name from Gateway cache
                 if result and not result.get("channel_name"):
                     result["channel_name"] = _discord_gw.channel_names.get(str(msg.get("channel_id", "")), "")

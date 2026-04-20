@@ -99,6 +99,7 @@ class DiscordGatewayMonitor:
         self._frame_count = 0
         self._worker_handle = None
         self._hooks_injected = False
+        self._channel_pages: dict[str, any] = {}  # channel_id -> page
 
         self._data_dir: Path = Path(".")
 
@@ -117,12 +118,48 @@ class DiscordGatewayMonitor:
     def set_data_dir(self, path: Path):
         self._data_dir = path
 
+    @staticmethod
+    def _parse_channel(value: str) -> tuple[str, str]:
+        """Parse a channel config value into (guild_id, channel_id).
+
+        Accepts:
+          - Full URL: https://discord.com/channels/1234/5678
+          - Slash pair: 1234/5678
+          - Plain channel ID: 5678 (guild_id will be empty)
+        """
+        value = str(value).strip()
+        if "discord.com/channels/" in value:
+            parts = value.split("/channels/")[1].split("/")
+            if len(parts) >= 2:
+                return parts[0], parts[1]
+        if "/" in value:
+            parts = value.split("/")
+            return parts[0], parts[1]
+        return "", value
+
     def update_channels(self, config: dict):
         dc = config.get("discord", {})
-        self._discord_channels = set(str(c) for c in dc.get("channels_to_monitor", []))
+        self._discord_channels = set()
+        self._channel_urls: dict[str, str] = {}  # channel_id -> full URL
+        for raw in dc.get("channels_to_monitor", []):
+            guild_id, ch_id = self._parse_channel(raw)
+            self._discord_channels.add(ch_id)
+            if guild_id:
+                self._channel_urls[ch_id] = f"https://discord.com/channels/{guild_id}/{ch_id}"
+
         mp = config.get("marketplace", {})
-        self._marketplace_sell_channels = set(str(c) for c in mp.get("sell_channels", []))
-        self._marketplace_buy_channels = set(str(c) for c in mp.get("buy_channels", []))
+        self._marketplace_sell_channels = set()
+        self._marketplace_buy_channels = set()
+        for raw in mp.get("sell_channels", []):
+            guild_id, ch_id = self._parse_channel(raw)
+            self._marketplace_sell_channels.add(ch_id)
+            if guild_id:
+                self._channel_urls[ch_id] = f"https://discord.com/channels/{guild_id}/{ch_id}"
+        for raw in mp.get("buy_channels", []):
+            guild_id, ch_id = self._parse_channel(raw)
+            self._marketplace_buy_channels.add(ch_id)
+            if guild_id:
+                self._channel_urls[ch_id] = f"https://discord.com/channels/{guild_id}/{ch_id}"
 
     async def start(self, config: dict, stealth_cfg: dict | None = None) -> bool:
         """Launch a visible browser and wait for the user to log into Discord."""
@@ -208,42 +245,19 @@ class DiscordGatewayMonitor:
             print("  [Discord GW] Waiting for Discord to fully load...")
             await asyncio.sleep(5)
 
-            # Navigate to first monitored channel so the observer can see messages
-            if self._discord_channels:
-                first_ch = next(iter(self._discord_channels))
-                # Find the guild/server for this channel from the sidebar
-                # For now, navigate directly via URL
-                try:
-                    # Discord channel URLs need guild ID — use @me as fallback
-                    # The user's browser should already be showing Discord
-                    # Just click on the channel in the sidebar if possible
-                    await self._navigate_to_channel(first_ch)
-                except Exception:
-                    pass
+            # Open a tab for each monitored channel
+            all_channels = self._discord_channels | self._marketplace_sell_channels | self._marketplace_buy_channels
+            if all_channels:
+                print(f"  [Discord GW] Opening tabs for {len(all_channels)} monitored channel(s)...")
+                await self._open_channel_tabs(all_channels)
 
-            # Retry hook injection (needs message list to be visible)
-            for attempt in range(10):
-                success = await self._inject_hooks()
-                if success:
-                    break
-                if attempt < 9:
-                    print(f"  [Discord GW] Retrying in 3s ({attempt+2}/10)...")
-                    await asyncio.sleep(3)
-
-            # Wait for messages to start flowing
-            print("  [Discord GW] Listening for new messages...")
-            for i in range(120):
-                await self.poll_gateway_messages()
-                if self._connected:
-                    break
-                await asyncio.sleep(0.5)
+            self._hooks_injected = True
+            self._connected = len(self._channel_pages) > 0
 
             if self._connected:
-                print("  [Discord GW] Gateway WebSocket connected!")
-                log.info("Discord Gateway monitor started — WebSocket active")
+                log.info(f"Discord Gateway started — monitoring {len(self._channel_pages)} channels")
             else:
-                print("  [Discord GW] WARNING: Gateway WebSocket not detected")
-                log.warning("Discord logged in but Gateway WebSocket not detected")
+                print("  [Discord GW] WARNING: No channel tabs opened — navigate to your server manually")
 
             return True
 
@@ -253,6 +267,78 @@ class DiscordGatewayMonitor:
             log.error(f"Failed to start: {e}")
             await self.stop()
             return False
+
+    async def _open_channel_tabs(self, channel_ids: set[str]):
+        """Open a browser tab for each monitored channel."""
+        # Use pre-built URLs from config (guild_id/channel_id format)
+        channel_urls = {ch: url for ch, url in self._channel_urls.items() if ch in channel_ids}
+
+        # For channels without a guild_id, try finding them in the sidebar
+        missing = channel_ids - set(channel_urls.keys())
+        if missing:
+            found = await self._page.evaluate("""(chIds) => {
+                let result = {};
+                let links = document.querySelectorAll('a[href*="/channels/"]');
+                for (let a of links) {
+                    for (let chId of chIds) {
+                        if (a.href.endsWith('/' + chId)) result[chId] = a.href;
+                    }
+                }
+                return result;
+            }""", list(missing))
+            channel_urls.update(found or {})
+
+        still_missing = channel_ids - set(channel_urls.keys())
+        if still_missing:
+            print(f"  [Discord GW] Channels missing guild ID (use server_id/channel_id format): {list(still_missing)}")
+
+        print(f"  [Discord GW] Opening {len(channel_urls)} channel tab(s):")
+        for ch_id, url in channel_urls.items():
+            print(f"  [Discord GW]   {ch_id} -> {url}")
+
+        if not channel_urls:
+            print("  [Discord GW] No channels to open — check your channel config format")
+            print("  [Discord GW] Use: https://discord.com/channels/SERVER_ID/CHANNEL_ID")
+            return
+
+        # Navigate the main page to the first channel
+        first_id = next(iter(channel_urls))
+        first_url = channel_urls[first_id]
+        await self._page.goto(first_url, timeout=15000)
+        await asyncio.sleep(3)
+        await self._init_page_polling(self._page, first_id)
+        self._channel_pages[first_id] = self._page
+
+        # Open new tabs for remaining channels
+        for ch_id, url in channel_urls.items():
+            if ch_id == first_id:
+                continue
+            try:
+                page = await self._context.new_page()
+                await page.goto(url, timeout=15000)
+                await asyncio.sleep(2)
+                await self._init_page_polling(page, ch_id)
+                self._channel_pages[ch_id] = page
+                ch_name = self.channel_names.get(ch_id, ch_id[-4:])
+                print(f"  [Discord GW] Opened tab for #{ch_name} ({ch_id})")
+            except Exception as e:
+                print(f"  [Discord GW] Failed to open tab for {ch_id}: {e}")
+
+    async def _init_page_polling(self, page, channel_id: str):
+        """Initialize the seen-message set on a page."""
+        try:
+            await page.evaluate("""(chId) => {
+                window._gwSeenIds = new Set();
+                window._gwDebug = [];
+                window._gwChannelId = chId;
+                let msgEls = document.querySelectorAll('[id^="chat-messages-"]');
+                for (let el of msgEls) {
+                    let id = el.id.replace('chat-messages-', '');
+                    if (id) window._gwSeenIds.add(id);
+                }
+            }""", channel_id)
+        except Exception:
+            pass
 
     async def _navigate_to_channel(self, channel_id: str):
         """Navigate to a Discord channel by finding its full URL in the page."""
@@ -289,58 +375,32 @@ class DiscordGatewayMonitor:
         self._worker_handle = worker
 
     async def _inject_hooks(self) -> bool:
-        """Initialize DOM polling by marking existing messages as seen."""
+        """No longer needed — tabs are initialized in _open_channel_tabs."""
         self._hooks_injected = True
-
-        try:
-            result = await self._page.evaluate("""() => {
-                window._gwSeenIds = new Set();
-                window._gwDebug = [];
-
-                // Check if we're on a channel page with messages
-                let msgEls = document.querySelectorAll('[id^="chat-messages-"]');
-                if (msgEls.length === 0) {
-                    return { ok: false, error: 'No messages found on page' };
-                }
-
-                // Mark existing messages as seen
-                for (let el of msgEls) {
-                    let id = el.id.replace('chat-messages-', '');
-                    if (id) window._gwSeenIds.add(id);
-                }
-
-                let urlParts = location.pathname.split('/');
-                let channel = urlParts[urlParts.length - 1] || '';
-
-                return { ok: true, existing: window._gwSeenIds.size, channel: channel };
-            }""")
-
-            if result and result.get("ok"):
-                print(f"  [Discord GW] Monitoring channel {result.get('channel')} ({result.get('existing', 0)} existing messages)")
-                self._connected = True
-                return True
-            else:
-                error = result.get("error", "unknown") if result else "No messages on page"
-                print(f"  [Discord GW] Init failed: {error}")
-                return False
-
-        except Exception as e:
-            print(f"  [Discord GW] Hook injection failed: {e}")
-            return False
+        return len(self._channel_pages) > 0
 
     async def poll_gateway_messages(self):
-        """Scan Discord's DOM for new messages since last poll."""
-        if not self._page or not self._hooks_injected:
+        """Scan all channel tabs for new messages."""
+        pages = list(self._channel_pages.items())
+        if not pages:
             return
+        for ch_id, page in pages:
+            await self._poll_page(page, ch_id)
+
+    async def _poll_page(self, page, channel_id: str):
+        """Scan a single page tab for new messages."""
         try:
-            result = await self._page.evaluate("""() => {
+            result = await page.evaluate("""(chId) => {
                 // Initialize seen set if needed
                 if (!window._gwSeenIds) window._gwSeenIds = new Set();
                 if (!window._gwDebug) window._gwDebug = [];
 
-                // Update current channel from URL
-                let urlParts = location.pathname.split('/');
-                let currentChannel = urlParts[urlParts.length - 1] || '';
+                // Use passed channel ID, fallback to URL
+                let currentChannel = chId || '';
+                if (!currentChannel) {
+                    let urlParts = location.pathname.split('/');
+                    currentChannel = urlParts[urlParts.length - 1] || '';
+                }
 
                 // Find all message elements currently in the DOM
                 let msgEls = document.querySelectorAll('[id^="chat-messages-"]');
@@ -400,18 +460,19 @@ class DiscordGatewayMonitor:
                             let imgEl = embedEl.querySelector('img[src]');
                             if (imgEl) image = imgEl.src;
 
+                            let fieldsList = [];
                             embedEl.querySelectorAll('[class*="embedField_"]').forEach(fEl => {
                                 let nEl = fEl.querySelector('[class*="embedFieldName"]');
                                 let vEl = fEl.querySelector('[class*="embedFieldValue"]');
                                 if (nEl && vEl) {
-                                    fields[nEl.textContent.trim()] = vEl.textContent.trim();
+                                    fieldsList.push({ name: nEl.textContent.trim(), value: vEl.textContent.trim() });
                                 }
                             });
 
                             if (title || description) {
                                 let e = { title, description, url };
-                                if (image) e.image = image;
-                                if (Object.keys(fields).length) e.fields = fields;
+                                if (image) e.thumbnail = { url: image };
+                                if (fieldsList.length) e.fields = fieldsList;
                                 embeds.push(e);
                             }
                         }
@@ -441,19 +502,19 @@ class DiscordGatewayMonitor:
                     channel: currentChannel,
                     totalSeen: window._gwSeenIds.size,
                 };
-            }""")
+            }""", channel_id)
 
             for dbg in result.get("debug", []):
                 print(f"  [Discord GW] {dbg}")
 
-            self._connected = result.get("connected", False)
+            self._connected = True
             msgs = result.get("msgs", [])
             if msgs:
                 self._last_ws_activity = time.time()
             for raw in msgs:
                 self._process_raw_message(raw)
-        except Exception as e:
-            log.debug(f"Poll error: {e}")
+        except Exception:
+            pass  # Tab might be loading or navigating
 
     def _process_raw_message(self, raw: str):
         try:
@@ -463,10 +524,6 @@ class DiscordGatewayMonitor:
         op = msg.get("op")
         event_type = msg.get("t")
         self._frame_count += 1
-        if self._frame_count <= 3:
-            d = msg.get("d", {})
-            author = d.get("author", {}).get("username", "?") if isinstance(d.get("author"), dict) else "?"
-            print(f"  [Discord GW] Message #{self._frame_count}: t={event_type}, author={author}")
         if op == _OP_DISPATCH:
             if event_type == "MESSAGE_CREATE":
                 self._handle_message_create(msg.get("d", {}))
