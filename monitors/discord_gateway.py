@@ -437,10 +437,19 @@ class DiscordGatewayMonitor:
                             }
                         }
 
-                        // Extract message content
+                        // Extract message content (preserve links as markdown)
                         let contentEl = el.querySelector('[class*="messageContent_"]') ||
                                         el.querySelector('[class*="messageContent"]');
-                        let content = contentEl ? contentEl.textContent.trim() : '';
+                        let content = '';
+                        if (contentEl) {
+                            // Replace <a> tags with markdown links before getting text
+                            let clone = contentEl.cloneNode(true);
+                            clone.querySelectorAll('a[href]').forEach(a => {
+                                let md = '[' + a.textContent + '](' + a.href + ')';
+                                a.replaceWith(md);
+                            });
+                            content = clone.textContent.trim();
+                        }
 
                         // Extract timestamp
                         let timeEl = el.querySelector('time');
@@ -462,8 +471,12 @@ class DiscordGatewayMonitor:
                             let dEl = embedEl.querySelector('[class*="embedDescription_"]');
                             if (dEl) description = dEl.textContent.trim();
 
-                            let aEl = embedEl.querySelector('a[href]');
-                            if (aEl) url = aEl.href;
+                            let titleLink = (tEl && tEl.closest('a')) || embedEl.querySelector('[class*="embedTitle"] a[href]');
+                            if (titleLink) url = titleLink.href;
+                            if (!url) {
+                                let aEl = embedEl.querySelector('a[href]');
+                                if (aEl) url = aEl.href;
+                            }
 
                             let imgEl = embedEl.querySelector('img[src]');
                             if (imgEl) image = imgEl.src;
@@ -473,7 +486,19 @@ class DiscordGatewayMonitor:
                                 let nEl = fEl.querySelector('[class*="embedFieldName"]');
                                 let vEl = fEl.querySelector('[class*="embedFieldValue"]');
                                 if (nEl && vEl) {
-                                    fieldsList.push({ name: nEl.textContent.trim(), value: vEl.textContent.trim() });
+                                    // Preserve markdown-style links from <a> tags
+                                    let val = '';
+                                    let links = vEl.querySelectorAll('a[href]');
+                                    if (links.length > 0) {
+                                        let parts = [];
+                                        links.forEach(a => {
+                                            parts.push('[' + a.textContent.trim() + '](' + a.href + ')');
+                                        });
+                                        val = parts.join(' | ');
+                                    } else {
+                                        val = vEl.textContent.trim();
+                                    }
+                                    fieldsList.push({ name: nEl.textContent.trim(), value: val });
                                 }
                             });
 
