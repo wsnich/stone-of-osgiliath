@@ -36,6 +36,9 @@
 
   "discord": {
     "enabled": false,
+    "method": "gateway",
+    "email": "YOUR_DISCORD_EMAIL",
+    "password": "YOUR_DISCORD_PASSWORD",
     "token": "YOUR_DISCORD_USER_TOKEN_HERE",
     "bot_token": "YOUR_BOT_TOKEN_HERE",
     "dm_user_id": "YOUR_DISCORD_USER_ID",

@@ -12,6 +12,9 @@ portfolio.json
 # Cached images
 web/images/
 
+# Discord browser session (cookies/localStorage)
+discord_session.json
+
 # Research agent output (logs, reports, run metadata)
 research/output/
 

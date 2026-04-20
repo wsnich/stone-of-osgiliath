@@ -1682,26 +1682,46 @@ select.form-input option { background: var(--surface2); }
         </div>
         <div class="settings-body" style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
           <div>
+            <label class="form-label">Monitoring Method</label>
+            <select class="form-input" id="set-discord-method" onchange="toggleDiscordMethodFields()" style="font-size:10px">
+              <option value="gateway">Browser Gateway (recommended)</option>
+              <option value="rest">REST API polling (legacy)</option>
+            </select>
+          </div>
+          <div id="discord-gateway-fields">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div>
+                <label class="form-label">Discord Email</label>
+                <input type="email" class="form-input" id="set-discord-email" placeholder="your@email.com" style="font-size:10px">
+              </div>
+              <div>
+                <label class="form-label">Discord Password</label>
+                <input type="password" class="form-input" id="set-discord-password" placeholder="Password" style="font-size:10px">
+              </div>
+            </div>
+            <div style="font-size:9px;color:var(--muted);margin-top:2px">Logs into Discord web in a headless browser. Looks like a normal browser session. Requires restart.</div>
+          </div>
+          <div id="discord-rest-fields" style="display:none">
             <label class="form-label">User Token <span style="color:var(--muted);font-weight:400">for reading channels</span></label>
             <input type="password" class="form-input" id="set-user-token" placeholder="Your Discord user token" style="font-size:10px">
+            <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px">
+              <div>
+                <label class="form-label">Poll Interval (s) <span style="color:var(--muted);font-weight:400">10-120</span></label>
+                <input type="number" class="form-input" id="set-discord-poll" min="10" max="120" value="30">
+              </div>
+            </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div>
-              <label class="form-label">Poll Interval (s) <span style="color:var(--muted);font-weight:400">10-120</span></label>
-              <input type="number" class="form-input" id="set-discord-poll" min="10" max="120" value="30">
-            </div>
             <div>
               <label class="form-label">Bot Token <span style="color:var(--muted);font-weight:400">for DM notifications</span></label>
               <input type="password" class="form-input" id="set-bot-token" placeholder="Bot token" style="font-size:10px">
             </div>
-          </div>
-          <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end">
             <div>
-              <label class="form-label">DM User ID <span style="color:var(--muted);font-weight:400">right-click yourself in Discord</span></label>
+              <label class="form-label">DM User ID <span style="color:var(--muted);font-weight:400">for notifications</span></label>
               <input type="text" class="form-input" id="set-dm-user-id" placeholder="Your Discord User ID" style="font-size:10px">
             </div>
-            <button class="btn btn-ghost btn-sm" onclick="testDiscordDM()" style="font-size:10px;white-space:nowrap;height:32px">Test DM</button>
           </div>
+          <button class="btn btn-ghost btn-sm" onclick="testDiscordDM()" style="font-size:10px;width:fit-content">Test DM</button>
         </div>
       </div>
 
@@ -2562,6 +2582,9 @@ function connectWS() {
         hubEntries = msg.data;
         renderHubGrid();
         break;
+      case 'discord_gateway_status':
+        handleGatewayStatus(msg.data);
+        break;
       case 'research_complete':
         updateResearchStatus(false);
         if (_activeTab === 'research') loadResearch();
@@ -3122,6 +3145,12 @@ async function toggleProduct(i, enabled) {
 
 // ── Settings ─────────────────────────────────────────────────
 
+function toggleDiscordMethodFields() {
+  const method = document.getElementById('set-discord-method').value;
+  document.getElementById('discord-gateway-fields').style.display = method === 'gateway' ? '' : 'none';
+  document.getElementById('discord-rest-fields').style.display = method === 'rest' ? '' : 'none';
+}
+
 function toggleSettingsSection(name) {
   const section = document.querySelector(`.settings-section[data-section="${name}"]`);
   if (!section) return;
@@ -3156,6 +3185,10 @@ async function openSettingsModal() {
   document.getElementById('set-discord-poll').value = data.discord_poll_interval || 30;
   document.getElementById('set-bot-token').value = data.bot_token || '';
   document.getElementById('set-dm-user-id').value = data.dm_user_id || '';
+  document.getElementById('set-discord-method').value = data.discord_method || 'rest';
+  document.getElementById('set-discord-email').value = data.discord_email || '';
+  document.getElementById('set-discord-password').value = data.discord_password || '';
+  toggleDiscordMethodFields();
   document.getElementById('set-research-enabled').checked = data.research_enabled || false;
   document.getElementById('set-research-api-key').value = data.research_api_key || '';
   document.getElementById('set-research-interval').value = data.research_interval_hours || 168;
@@ -3208,6 +3241,9 @@ async function saveSettingsModal() {
     discord_poll_interval: parseInt(document.getElementById('set-discord-poll').value) || 30,
     bot_token: document.getElementById('set-bot-token').value.trim(),
     dm_user_id: document.getElementById('set-dm-user-id').value.trim(),
+    discord_method: document.getElementById('set-discord-method').value,
+    discord_email: document.getElementById('set-discord-email').value.trim(),
+    discord_password: document.getElementById('set-discord-password').value.trim(),
     research_enabled: document.getElementById('set-research-enabled').checked,
     research_api_key: document.getElementById('set-research-api-key').value.trim(),
     research_interval_hours: parseInt(document.getElementById('set-research-interval').value) || 168,
@@ -7284,6 +7320,28 @@ async function triggerResearchRun() {
 }
 
 function _esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ── Discord Gateway Status ──────────────────────────────────────────
+
+function handleGatewayStatus(data) {
+  const state = data.state;
+  if (state === 'awaiting_2fa') {
+    show2FAPrompt();
+  }
+  // Log gateway state changes
+  console.log('Discord Gateway:', state, data.error || '');
+}
+
+function show2FAPrompt() {
+  const code = prompt('Discord 2FA code required.\nEnter your authenticator code:');
+  if (code && code.trim()) {
+    fetch('/api/discord/2fa', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: code.trim()}),
+    });
+  }
+}
 </script>
 </body>
 </html>
