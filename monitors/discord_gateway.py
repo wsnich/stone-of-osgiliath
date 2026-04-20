@@ -290,9 +290,29 @@ class DiscordGatewayMonitor:
             }""", list(missing))
             channel_urls.update(found or {})
 
+        # For any still-missing channels, search ALL servers in the sidebar
         still_missing = channel_ids - set(channel_urls.keys())
         if still_missing:
-            print(f"  [Discord GW] Channels missing guild ID (use server_id/channel_id format): {list(still_missing)}")
+            # Try expanding the server list by clicking on each server icon
+            try:
+                extra = await self._page.evaluate("""(chIds) => {
+                    // Search all links on the page (across all visible servers)
+                    let result = {};
+                    let links = document.querySelectorAll('a[href*="/channels/"]');
+                    for (let a of links) {
+                        for (let chId of chIds) {
+                            if (a.href.endsWith('/' + chId)) result[chId] = a.href;
+                        }
+                    }
+                    return result;
+                }""", list(still_missing))
+                channel_urls.update(extra or {})
+            except Exception:
+                pass
+
+        still_missing = channel_ids - set(channel_urls.keys())
+        if still_missing:
+            print(f"  [Discord GW] Channels not found (use server_id/channel_id format): {list(still_missing)}")
 
         print(f"  [Discord GW] Opening {len(channel_urls)} channel tab(s):")
         for ch_id, url in channel_urls.items():
@@ -348,10 +368,19 @@ class DiscordGatewayMonitor:
                     if (id) window._gwSeenIds.add(id);
                 }
                 // Extract channel name from the header
-                let nameEl = document.querySelector('h1[class*="title_"]') ||
-                             document.querySelector('[class*="channelName_"]') ||
-                             document.querySelector('h1');
-                let name = nameEl ? nameEl.textContent.trim().replace(/^#/, '') : '';
+                // Try multiple selectors for the channel name
+                let name = '';
+                // Discord's channel header has the name in a specific heading element
+                let nameEl = document.querySelector('[class*="channelName_"]') ||
+                             document.querySelector('h1[class*="title_"] [class*="channelName"]') ||
+                             document.querySelector('h1[class*="title_"]');
+                if (nameEl) {
+                    name = nameEl.textContent.trim().replace(/^#/, '');
+                }
+                // If we got a long name with category prefix, try to extract just the channel part
+                // Discord headers often show "Category ┃ channel-name" or similar
+                if (name.includes('┃')) name = name.split('┃').pop().trim();
+                if (name.includes('|')) name = name.split('|').pop().trim();
                 return { name: name };
             }""", channel_id)
             if result and result.get("name"):

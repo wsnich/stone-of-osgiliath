@@ -1918,11 +1918,12 @@ select.form-input option { background: var(--surface2); }
       <button id="discord-expand-btn" class="reddit-expand-btn" onclick="toggleDiscordExpand()" style="display:none"></button>
       <button class="reddit-expand-btn" onclick="clearDiscordFeed()" style="color:var(--red)">Clear</button>
     </div>
+    <div class="reddit-list" id="discord-list"></div>
     <div id="discord-channels-section" style="display:none;padding:6px 16px 8px;border-bottom:1px solid var(--border)">
       <div style="font-size:9px;color:var(--muted);margin-bottom:4px">CHANNELS:</div>
       <div id="discord-channels-list" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"></div>
       <div style="display:flex;gap:4px;align-items:center">
-        <input type="text" id="discord-add-channel" placeholder="Channel ID" style="width:180px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px">
+        <input type="text" id="discord-add-channel" placeholder="server_id/channel_id" style="width:220px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px">
         <button class="btn btn-ghost btn-sm" onclick="addDiscordChannel()" style="font-size:10px;padding:2px 8px">+ Add</button>
       </div>
     </div>
@@ -1940,7 +1941,6 @@ select.form-input option { background: var(--surface2); }
       <div id="discord-log-stats" style="font-size:10px;color:var(--muted);margin-bottom:4px"></div>
       <div id="discord-log-results" style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:3px"></div>
     </div>
-    <div class="reddit-list" id="discord-list"></div>
   </div>
 </div>
 
@@ -6071,7 +6071,7 @@ async function executeMerge(mergeId) {
 
 let discordPosts = [];
 let _discordExpanded = false;
-const DISCORD_PREVIEW = 3;
+const DISCORD_PREVIEW = 25;
 
 async function initDiscordFeed(posts) {
   discordPosts = posts || [];
