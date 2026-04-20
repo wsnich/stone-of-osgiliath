@@ -648,10 +648,11 @@ class DiscordGatewayMonitor:
     async def check_health(self) -> bool:
         if not self._running or not self._browser:
             return False
-        # Skip health checks for the first 2 minutes after startup
-        if not self._last_ws_activity:
-            return True
-        if time.time() - self._last_ws_activity > 300:
+        # Only check if browser is still alive — don't restart based on
+        # message activity since deal channels can be quiet for hours
+        try:
+            _ = self._page.url  # throws if browser crashed
+        except Exception:
             return False
         return True
 
