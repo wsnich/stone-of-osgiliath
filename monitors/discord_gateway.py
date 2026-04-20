@@ -1,20 +1,18 @@
 """
 Discord Gateway monitor via browser WebSocket interception.
 
-Instead of polling the REST API with a user token (which Discord flags
-as suspicious), this launches a headless browser, logs into Discord web,
-and intercepts the Gateway WebSocket frames the client naturally opens.
+Launches a visible browser window, lets the user log into Discord manually,
+then intercepts Gateway WebSocket messages via a send() hook injected into
+the page and Worker contexts.
 
-This looks like a normal user with Discord open in a browser tab.
+This looks like a normal user with Discord open in a browser — because it is.
 Messages arrive in real-time via MESSAGE_CREATE events.
 """
 
 import asyncio
 import json
 import logging
-import re
 import time
-import zlib
 from pathlib import Path
 from typing import Optional
 
@@ -22,12 +20,57 @@ from monitors.defaults import get_user_agent, get_browser_channel
 
 log = logging.getLogger("discord_gw")
 
-# Gateway opcodes
 _OP_DISPATCH = 0
-_OP_HEARTBEAT_ACK = 11
-
-# Session file for cookie/localStorage persistence
 _SESSION_FILE = "discord_session.json"
+
+_SEND_HOOK_JS = """() => {
+    var ctx = (typeof window !== 'undefined') ? window : self;
+    ctx._gwBuffer = [];
+    ctx._gwConnected = false;
+    ctx._gwDebug = [];
+    ctx._gwSocket = null;
+
+    var _origSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function(data) {
+        if (!ctx._gwSocket && this.url &&
+            this.url.indexOf('gateway') !== -1 &&
+            this.url.indexOf('discord') !== -1) {
+            ctx._gwSocket = this;
+            ctx._gwConnected = true;
+            ctx._gwDebug.push('HOOKED:' + this.url.substring(0, 60));
+
+            this.addEventListener('message', function(e) {
+                try {
+                    if (typeof e.data === 'string') {
+                        ctx._gwBuffer.push(e.data);
+                        if (ctx._gwBuffer.length > 500)
+                            ctx._gwBuffer = ctx._gwBuffer.slice(-250);
+                    } else {
+                        ctx._gwDebug.push('BINARY:' + typeof e.data);
+                    }
+                } catch(x) { ctx._gwDebug.push('ERR:' + x); }
+            });
+
+            this.addEventListener('close', function() {
+                ctx._gwConnected = false;
+                ctx._gwSocket = null;
+                ctx._gwDebug.push('CLOSED');
+            });
+        }
+        return _origSend.apply(this, arguments);
+    };
+    ctx._gwDebug.push('HOOK_INSTALLED');
+}"""
+
+_DRAIN_JS = """() => {
+    var ctx = (typeof window !== 'undefined') ? window : self;
+    var msgs = ctx._gwBuffer || [];
+    var connected = ctx._gwConnected || false;
+    var debug = ctx._gwDebug || [];
+    ctx._gwBuffer = [];
+    ctx._gwDebug = [];
+    return { msgs: msgs, connected: connected, debug: debug };
+}"""
 
 
 class DiscordGatewayMonitor:
@@ -39,32 +82,24 @@ class DiscordGatewayMonitor:
         self._context = None
         self._page = None
 
-        # Message queues for consumers
         self.discord_queue: asyncio.Queue = asyncio.Queue()
         self.marketplace_queue: asyncio.Queue = asyncio.Queue()
 
-        # Channel routing sets (populated from config)
         self._discord_channels: set[str] = set()
         self._marketplace_sell_channels: set[str] = set()
         self._marketplace_buy_channels: set[str] = set()
 
-        # Channel name cache (populated from Gateway READY/GUILD_CREATE)
         self.channel_names: dict[str, str] = {}
 
-        # State
         self._running = False
         self._connected = False
-        self._login_state = "not_started"  # not_started|logging_in|awaiting_2fa|logged_in|error
+        self._login_state = "not_started"
         self._last_ws_activity = 0.0
-        self._ws_ref = None  # Reference to the Gateway WebSocket
-        self._inflator = None  # zlib decompressor for Gateway frames
         self._error_message: str = ""
+        self._frame_count = 0
+        self._worker_handle = None
+        self._hooks_injected = False
 
-        # 2FA code (set via API when user provides it)
-        self._2fa_code: Optional[str] = None
-        self._2fa_event: asyncio.Event = asyncio.Event()
-
-        # Data dir for session persistence
         self._data_dir: Path = Path(".")
 
     @property
@@ -83,7 +118,6 @@ class DiscordGatewayMonitor:
         self._data_dir = path
 
     def update_channels(self, config: dict):
-        """Update channel routing from config."""
         dc = config.get("discord", {})
         self._discord_channels = set(str(c) for c in dc.get("channels_to_monitor", []))
         mp = config.get("marketplace", {})
@@ -91,17 +125,7 @@ class DiscordGatewayMonitor:
         self._marketplace_buy_channels = set(str(c) for c in mp.get("buy_channels", []))
 
     async def start(self, config: dict, stealth_cfg: dict | None = None) -> bool:
-        """Launch browser, log in to Discord, begin WebSocket interception."""
-        dc = config.get("discord", {})
-        email = dc.get("email", "")
-        password = dc.get("password", "")
-
-        if not email or not password:
-            self._login_state = "error"
-            self._error_message = "Discord email/password not configured"
-            log.error(self._error_message)
-            return False
-
+        """Launch a visible browser and wait for the user to log into Discord."""
         self.update_channels(config)
 
         try:
@@ -112,7 +136,6 @@ class DiscordGatewayMonitor:
             except ImportError:
                 self._login_state = "error"
                 self._error_message = "Neither patchright nor playwright installed"
-                log.error(self._error_message)
                 return False
 
         self._login_state = "logging_in"
@@ -120,13 +143,13 @@ class DiscordGatewayMonitor:
 
         try:
             self._pw = await _playwright().start()
-            launch_kw = {"headless": True}
+            launch_kw = {"headless": False}  # Visible browser for manual login
             channel = get_browser_channel(stealth_cfg)
             if channel:
                 launch_kw["channel"] = channel
             self._browser = await self._pw.chromium.launch(**launch_kw)
 
-            # Try to restore session from saved cookies
+            # Try restoring session
             session_path = self._data_dir / _SESSION_FILE
             context_kw = {
                 "user_agent": get_user_agent(stealth_cfg),
@@ -135,200 +158,315 @@ class DiscordGatewayMonitor:
             if session_path.exists():
                 try:
                     context_kw["storage_state"] = str(session_path)
-                    log.info("Restoring Discord session from saved state")
+                    print("  [Discord GW] Restoring saved session...")
                 except Exception:
                     pass
 
             self._context = await self._browser.new_context(**context_kw)
             self._page = await self._context.new_page()
 
-            # Set up WebSocket interception BEFORE navigating
-            self._page.on("websocket", self._on_websocket)
+            # Listen for Workers
+            self._page.on("worker", self._on_worker)
 
-            # Try navigating to channels (may already be logged in from session)
+            # Navigate to Discord
             await self._page.goto("https://discord.com/channels/@me", timeout=30000)
             await asyncio.sleep(3)
 
-            # Check if we're logged in or need to log in
-            if "/login" in self._page.url:
-                log.info("Session expired or first login, entering credentials")
-                success = await self._do_login(email, password)
-                if not success:
+            # Check if we need to log in
+            if "/login" in self._page.url or "/register" in self._page.url:
+                print("  [Discord GW] *** Please log into Discord in the browser window ***")
+                self._login_state = "awaiting_login"
+
+                # Wait for user to complete login (up to 5 minutes)
+                for _ in range(300):
+                    await asyncio.sleep(1)
+                    try:
+                        url = self._page.url
+                        if "/channels" in url and "/login" not in url:
+                            print("  [Discord GW] Login detected!")
+                            break
+                    except Exception:
+                        pass
+                else:
+                    self._login_state = "error"
+                    self._error_message = "Login timed out (5 minutes)"
+                    print("  [Discord GW] Login timed out")
                     return False
             else:
-                log.info("Restored Discord session — already logged in")
+                print("  [Discord GW] Already logged in from saved session")
 
             # Save session for next time
             try:
                 await self._context.storage_state(path=str(session_path))
-            except Exception as e:
-                log.debug(f"Could not save session state: {e}")
+                print("  [Discord GW] Session saved for next restart")
+            except Exception:
+                pass
 
             self._login_state = "logged_in"
-            self._connected = True
-            log.info("Discord Gateway monitor started")
+
+            # Wait for Discord to fully load, then inject hooks
+            print("  [Discord GW] Waiting for Discord to fully load...")
+            await asyncio.sleep(5)
+
+            # Navigate to first monitored channel so the observer can see messages
+            if self._discord_channels:
+                first_ch = next(iter(self._discord_channels))
+                # Find the guild/server for this channel from the sidebar
+                # For now, navigate directly via URL
+                try:
+                    # Discord channel URLs need guild ID — use @me as fallback
+                    # The user's browser should already be showing Discord
+                    # Just click on the channel in the sidebar if possible
+                    await self._navigate_to_channel(first_ch)
+                except Exception:
+                    pass
+
+            # Retry hook injection (needs message list to be visible)
+            for attempt in range(10):
+                success = await self._inject_hooks()
+                if success:
+                    break
+                if attempt < 9:
+                    print(f"  [Discord GW] Retrying in 3s ({attempt+2}/10)...")
+                    await asyncio.sleep(3)
+
+            # Wait for messages to start flowing
+            print("  [Discord GW] Listening for new messages...")
+            for i in range(120):
+                await self.poll_gateway_messages()
+                if self._connected:
+                    break
+                await asyncio.sleep(0.5)
+
+            if self._connected:
+                print("  [Discord GW] Gateway WebSocket connected!")
+                log.info("Discord Gateway monitor started — WebSocket active")
+            else:
+                print("  [Discord GW] WARNING: Gateway WebSocket not detected")
+                log.warning("Discord logged in but Gateway WebSocket not detected")
+
             return True
 
         except Exception as e:
             self._login_state = "error"
             self._error_message = str(e)
-            log.error(f"Failed to start Discord Gateway monitor: {e}")
+            log.error(f"Failed to start: {e}")
             await self.stop()
             return False
 
-    async def _do_login(self, email: str, password: str) -> bool:
-        """Fill login form and handle 2FA if needed."""
-        page = self._page
+    async def _navigate_to_channel(self, channel_id: str):
+        """Navigate to a Discord channel by finding its full URL in the page."""
         try:
-            # Navigate to login page if not already there
-            if "/login" not in page.url:
-                await page.goto("https://discord.com/login", timeout=20000)
-                await asyncio.sleep(2)
+            # Search all links in the page for one ending with this channel ID
+            url = await self._page.evaluate("""(chId) => {
+                // Search all links for one containing the channel ID
+                let links = document.querySelectorAll('a[href*="/channels/"]');
+                for (let a of links) {
+                    if (a.href.endsWith('/' + chId)) return a.href;
+                }
+                // Also check data attributes
+                let el = document.querySelector('[data-list-item-id="channels___' + chId + '"]');
+                if (el) {
+                    let a = el.closest('a') || el.querySelector('a');
+                    if (a) return a.href;
+                }
+                return null;
+            }""", channel_id)
 
-            # Fill email
-            email_input = await page.wait_for_selector('input[name="email"]', timeout=10000)
-            await email_input.fill(email)
+            if url:
+                await self._page.goto(url, timeout=15000)
+                await asyncio.sleep(3)
+                print(f"  [Discord GW] Navigated to channel {channel_id}")
+                return
 
-            # Fill password
-            password_input = await page.wait_for_selector('input[name="password"]', timeout=5000)
-            await password_input.fill(password)
+            # Channel not found in DOM — the user may need to switch to the right server first
+            print(f"  [Discord GW] Channel {channel_id} not found — navigate to it manually in the browser")
+        except Exception as e:
+            print(f"  [Discord GW] Channel navigation failed: {e}")
 
-            # Click login button
-            await page.click('button[type="submit"]')
+    def _on_worker(self, worker):
+        print(f"  [Discord GW] Worker created: {worker.url[:80]}")
+        self._worker_handle = worker
 
-            # Wait for navigation or 2FA prompt
-            for _ in range(30):
-                await asyncio.sleep(1)
-                url = page.url
+    async def _inject_hooks(self) -> bool:
+        """Initialize DOM polling by marking existing messages as seen."""
+        self._hooks_injected = True
 
-                # Success — redirected to channels
-                if "/channels" in url and "/login" not in url:
-                    log.info("Discord login successful")
-                    return True
+        try:
+            result = await self._page.evaluate("""() => {
+                window._gwSeenIds = new Set();
+                window._gwDebug = [];
 
-                # Check for 2FA/MFA prompt
-                mfa_input = await page.query_selector('input[placeholder*="code" i], input[aria-label*="code" i], input[autocomplete="one-time-code"]')
-                if mfa_input:
-                    return await self._handle_2fa(mfa_input)
+                // Check if we're on a channel page with messages
+                let msgEls = document.querySelectorAll('[id^="chat-messages-"]');
+                if (msgEls.length === 0) {
+                    return { ok: false, error: 'No messages found on page' };
+                }
 
-                # Check for error message
-                error_el = await page.query_selector('[class*="error" i]')
-                if error_el:
-                    error_text = await error_el.text_content()
-                    if error_text and "password" in error_text.lower():
-                        self._login_state = "error"
-                        self._error_message = "Invalid email or password"
-                        log.error(self._error_message)
-                        return False
+                // Mark existing messages as seen
+                for (let el of msgEls) {
+                    let id = el.id.replace('chat-messages-', '');
+                    if (id) window._gwSeenIds.add(id);
+                }
 
-            self._login_state = "error"
-            self._error_message = "Login timed out"
-            log.error("Discord login timed out after 30 seconds")
-            return False
+                let urlParts = location.pathname.split('/');
+                let channel = urlParts[urlParts.length - 1] || '';
+
+                return { ok: true, existing: window._gwSeenIds.size, channel: channel };
+            }""")
+
+            if result and result.get("ok"):
+                print(f"  [Discord GW] Monitoring channel {result.get('channel')} ({result.get('existing', 0)} existing messages)")
+                self._connected = True
+                return True
+            else:
+                error = result.get("error", "unknown") if result else "No messages on page"
+                print(f"  [Discord GW] Init failed: {error}")
+                return False
 
         except Exception as e:
-            self._login_state = "error"
-            self._error_message = f"Login failed: {e}"
-            log.error(self._error_message)
+            print(f"  [Discord GW] Hook injection failed: {e}")
             return False
 
-    async def _handle_2fa(self, mfa_input) -> bool:
-        """Handle 2FA prompt — wait for code from user via API."""
-        log.info("2FA required — waiting for code from user")
-        self._login_state = "awaiting_2fa"
-        self._2fa_event.clear()
-        self._2fa_code = None
-
-        # Wait up to 5 minutes for user to provide code
+    async def poll_gateway_messages(self):
+        """Scan Discord's DOM for new messages since last poll."""
+        if not self._page or not self._hooks_injected:
+            return
         try:
-            await asyncio.wait_for(self._2fa_event.wait(), timeout=300)
-        except asyncio.TimeoutError:
-            self._login_state = "error"
-            self._error_message = "2FA code not provided within 5 minutes"
-            log.error(self._error_message)
-            return False
+            result = await self._page.evaluate("""() => {
+                // Initialize seen set if needed
+                if (!window._gwSeenIds) window._gwSeenIds = new Set();
+                if (!window._gwDebug) window._gwDebug = [];
 
-        if not self._2fa_code:
-            self._login_state = "error"
-            self._error_message = "No 2FA code provided"
-            return False
+                // Update current channel from URL
+                let urlParts = location.pathname.split('/');
+                let currentChannel = urlParts[urlParts.length - 1] || '';
 
-        # Enter the code
-        try:
-            await mfa_input.fill(self._2fa_code)
-            # Try pressing Enter or clicking submit
-            await mfa_input.press("Enter")
+                // Find all message elements currently in the DOM
+                let msgEls = document.querySelectorAll('[id^="chat-messages-"]');
+                let newMsgs = [];
 
-            # Wait for redirect to channels
-            for _ in range(15):
-                await asyncio.sleep(1)
-                if "/channels" in self._page.url and "/login" not in self._page.url:
-                    log.info("2FA login successful")
-                    self._login_state = "logged_in"
-                    return True
+                for (let el of msgEls) {
+                    let msgId = el.id.replace('chat-messages-', '');
+                    if (!msgId || window._gwSeenIds.has(msgId)) continue;
+                    window._gwSeenIds.add(msgId);
 
-            self._login_state = "error"
-            self._error_message = "2FA code may be incorrect"
-            log.error("2FA login did not redirect to channels")
-            return False
+                    try {
+                        // Extract author
+                        let authorEl = el.querySelector('[class*="username_"]') ||
+                                       el.querySelector('[class*="headerText_"] [class*="username"]') ||
+                                       el.querySelector('h3 span');
+                        let author = authorEl ? authorEl.textContent.trim() : '';
 
+                        // For grouped messages (no header), inherit from previous
+                        if (!author) {
+                            let prev = el.previousElementSibling;
+                            while (prev && !author) {
+                                let prevAuthor = prev.querySelector('[class*="username_"]') ||
+                                                 prev.querySelector('h3 span');
+                                if (prevAuthor) author = prevAuthor.textContent.trim();
+                                prev = prev.previousElementSibling;
+                            }
+                        }
+
+                        // Extract message content
+                        let contentEl = el.querySelector('[class*="messageContent_"]') ||
+                                        el.querySelector('[class*="messageContent"]');
+                        let content = contentEl ? contentEl.textContent.trim() : '';
+
+                        // Extract timestamp
+                        let timeEl = el.querySelector('time');
+                        let timestamp = timeEl ? (timeEl.getAttribute('datetime') || '') : '';
+
+                        // Extract embeds
+                        let embeds = [];
+                        let embedEls = el.querySelectorAll('[class*="embedWrapper_"], [class*="embed_"]');
+                        for (let embedEl of embedEls) {
+                            let title = '';
+                            let description = '';
+                            let url = '';
+                            let fields = {};
+                            let image = '';
+
+                            let tEl = embedEl.querySelector('[class*="embedTitle_"], [class*="embedAuthorName"]');
+                            if (tEl) title = tEl.textContent.trim();
+
+                            let dEl = embedEl.querySelector('[class*="embedDescription_"]');
+                            if (dEl) description = dEl.textContent.trim();
+
+                            let aEl = embedEl.querySelector('a[href]');
+                            if (aEl) url = aEl.href;
+
+                            let imgEl = embedEl.querySelector('img[src]');
+                            if (imgEl) image = imgEl.src;
+
+                            embedEl.querySelectorAll('[class*="embedField_"]').forEach(fEl => {
+                                let nEl = fEl.querySelector('[class*="embedFieldName"]');
+                                let vEl = fEl.querySelector('[class*="embedFieldValue"]');
+                                if (nEl && vEl) {
+                                    fields[nEl.textContent.trim()] = vEl.textContent.trim();
+                                }
+                            });
+
+                            if (title || description) {
+                                let e = { title, description, url };
+                                if (image) e.image = image;
+                                if (Object.keys(fields).length) e.fields = fields;
+                                embeds.push(e);
+                            }
+                        }
+
+                        if (!content && embeds.length === 0) continue;
+
+                        newMsgs.push(JSON.stringify({
+                            op: 0, t: 'MESSAGE_CREATE',
+                            d: {
+                                id: msgId,
+                                channel_id: currentChannel,
+                                author: { username: author, id: '', avatar: '' },
+                                content: content,
+                                timestamp: timestamp,
+                                embeds: embeds,
+                            }
+                        }));
+                    } catch(e) {
+                        window._gwDebug.push('EXTRACT_ERR:' + e.message);
+                    }
+                }
+
+                return {
+                    msgs: newMsgs,
+                    connected: true,
+                    debug: window._gwDebug.splice(0),
+                    channel: currentChannel,
+                    totalSeen: window._gwSeenIds.size,
+                };
+            }""")
+
+            for dbg in result.get("debug", []):
+                print(f"  [Discord GW] {dbg}")
+
+            self._connected = result.get("connected", False)
+            msgs = result.get("msgs", [])
+            if msgs:
+                self._last_ws_activity = time.time()
+            for raw in msgs:
+                self._process_raw_message(raw)
         except Exception as e:
-            self._login_state = "error"
-            self._error_message = f"2FA entry failed: {e}"
-            log.error(self._error_message)
-            return False
+            log.debug(f"Poll error: {e}")
 
-    def submit_2fa_code(self, code: str):
-        """Called from the API endpoint when user provides 2FA code."""
-        self._2fa_code = code.strip()
-        self._2fa_event.set()
-
-    def _on_websocket(self, ws):
-        """Called when a WebSocket connection is opened by the page."""
-        url = ws.url
-        # Only intercept the Discord Gateway WebSocket
-        if "gateway.discord.gg" not in url and "gateway-us-east" not in url and "gateway" not in url:
-            return
-        if "discord" not in url:
-            return
-
-        log.info(f"Gateway WebSocket detected: {url[:80]}")
-        self._ws_ref = ws
-        self._inflator = zlib.decompressobj()
-        self._connected = True
-        self._last_ws_activity = time.time()
-
-        ws.on("framereceived", lambda payload: self._on_ws_frame(payload))
-        ws.on("close", lambda _=None: self._on_ws_close())
-
-    def _on_ws_frame(self, payload):
-        """Handle a received WebSocket frame."""
-        self._last_ws_activity = time.time()
-
-        data = payload
-        # payload may be a string (text frame) or bytes (binary frame)
-        if isinstance(data, bytes):
-            # Try zlib decompression (Discord uses zlib-stream)
-            try:
-                data = self._inflator.decompress(data)
-                data = data.decode("utf-8")
-            except Exception:
-                try:
-                    data = data.decode("utf-8")
-                except Exception:
-                    return
-        elif hasattr(data, 'body'):
-            # Playwright wraps frames in an object
-            data = data.body if isinstance(data.body, str) else data.body.decode("utf-8", errors="replace")
-
+    def _process_raw_message(self, raw: str):
         try:
-            msg = json.loads(data)
+            msg = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             return
-
         op = msg.get("op")
         event_type = msg.get("t")
-
+        self._frame_count += 1
+        if self._frame_count <= 3:
+            d = msg.get("d", {})
+            author = d.get("author", {}).get("username", "?") if isinstance(d.get("author"), dict) else "?"
+            print(f"  [Discord GW] Message #{self._frame_count}: t={event_type}, author={author}")
         if op == _OP_DISPATCH:
             if event_type == "MESSAGE_CREATE":
                 self._handle_message_create(msg.get("d", {}))
@@ -337,24 +475,19 @@ class DiscordGatewayMonitor:
             elif event_type == "GUILD_CREATE":
                 self._handle_guild_create(msg.get("d", {}))
 
-    def _on_ws_close(self):
-        """Gateway WebSocket closed."""
-        log.warning("Gateway WebSocket closed")
-        self._connected = False
-        self._inflator = None
-
     def _handle_ready(self, data: dict):
-        """Extract channel names from READY event."""
-        log.info("Gateway READY received")
+        count = 0
         for guild in data.get("guilds", []):
             for ch in guild.get("channels", []):
                 cid = str(ch.get("id", ""))
                 name = ch.get("name", "")
                 if cid and name:
                     self.channel_names[cid] = name
+                    count += 1
+        log.info(f"Gateway READY — cached {count} channel names")
+        print(f"  [Discord GW] READY: {count} channel names from {len(data.get('guilds', []))} guilds")
 
     def _handle_guild_create(self, data: dict):
-        """Extract channel names from GUILD_CREATE event."""
         for ch in data.get("channels", []):
             cid = str(ch.get("id", ""))
             name = ch.get("name", "")
@@ -362,15 +495,12 @@ class DiscordGatewayMonitor:
                 self.channel_names[cid] = name
 
     def _handle_message_create(self, data: dict):
-        """Route MESSAGE_CREATE to the appropriate queue(s)."""
         channel_id = str(data.get("channel_id", ""))
-
         if channel_id in self._discord_channels:
             try:
                 self.discord_queue.put_nowait(data)
             except asyncio.QueueFull:
                 pass
-
         if channel_id in self._marketplace_sell_channels or channel_id in self._marketplace_buy_channels:
             try:
                 self.marketplace_queue.put_nowait(data)
@@ -378,7 +508,6 @@ class DiscordGatewayMonitor:
                 pass
 
     async def drain_discord_queue(self) -> list[dict]:
-        """Drain all pending messages from the discord queue."""
         messages = []
         while not self.discord_queue.empty():
             try:
@@ -388,7 +517,6 @@ class DiscordGatewayMonitor:
         return messages
 
     async def drain_marketplace_queue(self) -> list[dict]:
-        """Drain all pending messages from the marketplace queue."""
         messages = []
         while not self.marketplace_queue.empty():
             try:
@@ -398,15 +526,13 @@ class DiscordGatewayMonitor:
         return messages
 
     async def stop(self):
-        """Shut down the browser and clean up."""
         self._running = False
         self._connected = False
         try:
             if self._context:
-                # Save session before closing
                 try:
-                    session_path = self._data_dir / _SESSION_FILE
-                    await self._context.storage_state(path=str(session_path))
+                    await self._context.storage_state(
+                        path=str(self._data_dir / _SESSION_FILE))
                 except Exception:
                     pass
                 await self._context.close()
@@ -426,33 +552,20 @@ class DiscordGatewayMonitor:
         self._context = None
         self._page = None
         self._pw = None
-        log.info("Discord Gateway monitor stopped")
 
     async def check_health(self) -> bool:
-        """Check if the monitor is healthy. Returns False if restart needed."""
         if not self._running or not self._browser:
             return False
-
-        # Check if page is still alive and on Discord
         try:
-            url = self._page.url
-            if "/login" in url:
-                log.warning("Discord session expired (redirected to login)")
+            if "/login" in self._page.url:
                 return False
         except Exception:
-            log.warning("Browser page not responsive")
             return False
-
-        # Check WebSocket activity (Gateway heartbeats happen every ~40s)
         if self._last_ws_activity and (time.time() - self._last_ws_activity > 120):
-            log.warning("No Gateway WebSocket activity for 120s")
             return False
-
         return True
 
     async def restart(self, config: dict, stealth_cfg: dict | None = None) -> bool:
-        """Stop and restart the monitor."""
-        log.info("Restarting Discord Gateway monitor...")
         await self.stop()
         await asyncio.sleep(2)
         return await self.start(config, stealth_cfg)

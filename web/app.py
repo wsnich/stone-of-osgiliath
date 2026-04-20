@@ -248,6 +248,7 @@ async def discord_gateway_loop():
             _discord_gw.update_channels(config)
             token = config.get("discord", {}).get("token", "")
 
+            await _discord_gw.poll_gateway_messages()
             raw_messages = await _discord_gw.drain_discord_queue()
 
             # On first batch, just mark seen IDs without processing
