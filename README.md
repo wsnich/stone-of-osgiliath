@@ -2,7 +2,7 @@
 
 *That Which Looks Far Away*
 
-A real-time price monitoring, deal tracking, and collection management tool for trading card games and collectibles. Monitors Discord deal channels, tracks TCGPlayer and eBay prices, aggregates deals across retailers, and sends you push notifications when something interesting hits.
+A real-time price monitoring, deal tracking, and collection management tool for trading card games and collectibles. Monitors Discord deal channels and marketplace (BST) channels, tracks TCGPlayer and eBay prices, aggregates deals across retailers, and sends you push notifications when something interesting hits.
 
 Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 
@@ -14,11 +14,20 @@ Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 - **Retailer extraction** — parses Amazon, Walmart, Target, Best Buy, TCGPlayer, GameStop from embed data and URLs
 - **Deal scoring** — compares Discord deal prices against your TCGPlayer market data ("27% below market")
 - **Checkout link extraction** — captures ATC/add-to-cart links from Moonitor, Zephr, Refract and surfaces them on deals
+- **Blocked retailers** — filter out specific domains (e.g. amazon.ca)
 - **Multi-game filter** — checkbox dropdown to show any combination of games
 - **Channel management** — add/remove monitored channels from the UI with auto-resolved channel names
 - **Keyword management** — manual + auto-generated keywords, ignore patterns, min price filter
 - **Audit log** — search all messages (shown and filtered) with reason tracking
 - **DM notifications** — get push notifications on your phone via Discord bot DM when deals are found
+
+### Discord Marketplace (BST) Monitoring
+- Monitors Buy/Sell/Trade channels for peer-to-peer listings
+- **Auto-parses** free-text messages to extract items, prices, and quantities
+- **WTS/WTB detection** — identifies selling vs buying intent
+- **Auto-matches** against your tracked TCGPlayer products
+- **Deal alerts** — DM notification when a seller's price is 15%+ below TCG market
+- **Jump to message** — direct link to claim deals in Discord
 
 ### TCGPlayer Price Tracking
 - Monitors market prices, lowest listings, and seller quantities for singles and sealed product
@@ -32,14 +41,16 @@ Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 - **Trend indicators** — price trend arrows (vs 7-day average) and supply trend indicators on cards
 - **Card and Table views** — toggle between full cards and compact table with drag-and-drop reordering
 
-### Comics Tracking
-- Monitors eBay/130point.com sold listings with grade breakdowns (CGC, CBCS, PSA, Raw)
-- Sales review modal with grade classification, ignore/learn system
+### Graded Collectibles
+- Monitors eBay/130point.com sold listings for graded items (comics, Pokemon cards, baseball cards, etc.)
+- Grade breakdowns: CGC, CBCS, PSA, Raw
+- Sales review modal with grade classification and ignore/learn system
 - Facsimile edition auto-filtering
+- Configurable check interval (default 7 days)
 - Card and Table views with drag-and-drop reordering
 
-### Product Hub
-- Centralized product registry linking TCGPlayer data, retailer URLs, and Discord deals
+### Watchlist (Product Hub)
+- Centralized registry linking TCGPlayer data, retailer URLs, and Discord deals for products you're tracking
 - Auto-created when adding TCGPlayer items
 - Compact card layout with image, price data, retailer links, and deal chips
 - Assign/unassign deals, link TCGPlayer items, add retailer URLs
@@ -47,19 +58,22 @@ Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 ### Deal Aggregation
 - Auto-groups Discord messages about the same product using Jaccard similarity matching
 - Cards and Table views with deal scoring
-- Tag, merge, dismiss, or assign deals to Products
+- Tag, merge, dismiss, or assign deals to Watchlist items
 - Checkout links surfaced on deal cards
 
-### Retailer Intelligence (Overview Tab)
+### Retailer Intelligence
 - Automatically built from Discord feed data
-- Retailer universe — all known retailers carrying TCG products with sighting counts, price ranges, games
-- Product x Retailer matrix — which retailers carry each product with price comparison
-- Game filter — drill down by specific game
+- **Retailer universe** — all known retailers with sighting counts, price ranges, games carried
+- **Product x Retailer matrix** — which retailers carry each product with price comparison
+- **Restock timing patterns** — hour-of-day and day-of-week heatmaps per retailer
+- **Toggle absolute/percentage** view on timing heatmaps
+- **Product filter** — drill down by specific game
 - Continuously learns from new Discord messages
 
 ### Reddit Feed
-- Live feed from r/sealedmtgdeals
-- Collapsible with preview posts
+- Configurable subreddits (e.g. sealedmtgdeals, pokemontcg, baseballcards)
+- Multiple subreddits supported, managed via Settings
+- Configurable poll interval
 
 ### Portfolio
 - Track collection purchases with cost basis
@@ -69,7 +83,22 @@ Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 - All configuration editable from the UI (gear icon)
 - Monitor interval, browser settings, timeouts, user agent
 - Discord token management, bot token for DM notifications
+- Marketplace BST channel configuration
+- Reddit subreddit management
+- Graded check interval
 - Data directory for custom file locations
+- **First-run setup wizard** — guided setup for new users
+
+## Tabs
+
+| Tab | Purpose |
+|-----|---------|
+| **Watchlist** | Central hub linking TCGPlayer data, retailer URLs, and deals for tracked products |
+| **Deals** | Auto-aggregated deal alerts from Discord, with scoring and checkout links |
+| **TCGPlayer** | Singles and sealed product monitoring with histograms and trend data |
+| **Graded** | Graded collectibles (comics, cards) with eBay sold comps and grade breakdowns |
+| **Portfolio** | Collection tracking with purchase prices |
+| **Intelligence** | Retailer universe, product matrix, and restock timing patterns |
 
 ## Requirements
 
@@ -83,7 +112,7 @@ Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 1. Install [Python 3.10+](https://www.python.org/downloads/) — **check "Add Python to PATH"** during installation
 2. Download this repo (Code → Download ZIP) and extract it, or `git clone https://github.com/wsnich/stone-of-osgiliath.git`
 3. Double-click **`setup.bat`** — installs all dependencies automatically
-4. Edit `config.json` to add your Discord token (see Discord Setup below)
+4. Edit `config.json` to add your Discord token (see Discord Setup below), or use the in-app setup wizard
 5. Double-click **`start.bat`** to run the app
 6. Open **http://localhost:8888** in your browser
 
@@ -114,16 +143,17 @@ python -m playwright install chromium
    cp config.example.json config.json
    ```
 
-2. Edit `config.json` with your settings (see Config Reference below)
+2. Edit `config.json` with your settings, or use the first-run setup wizard in the browser
 
 ### Discord Setup
 
 **User Token** (required for monitoring channels):
 1. Open Discord in your **web browser** (not the desktop app)
 2. Press F12 > Network tab
-3. Filter for `science` or `messages`
-4. Click any request > Headers > find `Authorization:` value
-5. Copy that token into `config.json` under `discord.token`
+3. Filter for `messages`
+4. Click any channel to trigger a request
+5. Click the request > Headers > find `Authorization:` value
+6. Copy that token into Settings (gear icon) > User Token
 
 **Bot Token** (optional, for DM notifications):
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
@@ -141,7 +171,8 @@ python -m playwright install chromium
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `check_interval_seconds` | int | 300 | Base interval between TCGPlayer/Comics checks |
+| `check_interval_seconds` | int | 300 | Base interval between TCGPlayer checks |
+| `graded_interval_seconds` | int | 604800 | Graded item check interval (default 7 days) |
 | `data_dir` | string/null | null | Custom directory for all data files. Null = project root |
 | `stealth.jitter_pct` | int | 20 | Random jitter percentage added to intervals |
 | `stealth.headless` | bool | true | Run browsers in headless mode |
@@ -158,6 +189,12 @@ python -m playwright install chromium
 | `discord.keywords` | array | [] | Manual keywords (auto-keywords from products) |
 | `discord.min_price` | number | 0 | Minimum price filter (0 = no filter) |
 | `discord.ignored_patterns` | array | [] | Substrings to auto-filter |
+| `discord.blocked_retailers` | array | [] | Domain patterns to block (e.g. "amazon.ca") |
+| `marketplace.enabled` | bool | false | Enable BST channel monitoring |
+| `marketplace.sell_channels` | array | [] | Discord selling channel IDs |
+| `marketplace.buy_channels` | array | [] | Discord buying channel IDs |
+| `reddit.subreddits` | array | ["sealedmtgdeals"] | Subreddits to monitor |
+| `reddit.poll_interval_seconds` | int | 60 | Reddit polling interval |
 | `schedule.enabled` | bool | false | Enable active-hours schedule |
 | `schedule.start` | string | "07:00" | Active hours start (HH:MM) |
 | `schedule.end` | string | "23:00" | Active hours end (HH:MM) |
@@ -187,10 +224,10 @@ All stored in the project root (or `data_dir` if configured):
 | File | Purpose | Git-ignored |
 |------|---------|-------------|
 | `config.json` | Your configuration with secrets | Yes |
-| `price_history.db` | SQLite database (price checks, Discord log, retailer intelligence) | Yes |
+| `price_history.db` | SQLite database (price checks, Discord log, retailer intelligence, marketplace) | Yes |
 | `app_state.json` | Current product state | Yes |
 | `tracked_deals.json` | Aggregated Discord deals | Yes |
-| `products_hub.json` | Product hub entries | Yes |
+| `products_hub.json` | Watchlist entries | Yes |
 | `portfolio.json` | Portfolio items | Yes |
 | `web/images/` | Cached product images | Yes |
 
@@ -201,29 +238,32 @@ All stored in the project root (or `data_dir` if configured):
 - **Browser Automation**: Patchright (CDP-stealth Playwright fork)
 - **HTTP Client**: curl-cffi (TLS fingerprint matching)
 - **Real-time**: WebSocket for live updates
-- **Database**: SQLite (price_history, tcg_history, ebay_sold, discord_log, retailer_sightings)
+- **Database**: SQLite (price_history, tcg_history, ebay_sold, discord_log, retailer_sightings, marketplace_messages)
 
 ## Architecture
 
 ```
-mtg-monitor/
-  main.py              # App launcher
-  db.py                # SQLite database layer
-  config.example.json  # Template config
-  requirements.txt     # Python dependencies
+stone-of-osgiliath/
+  main.py                # App launcher
+  db.py                  # SQLite database layer
+  config.example.json    # Template config
+  requirements.txt       # Python dependencies
+  setup.bat              # Windows one-click setup
+  start.bat              # Windows one-click launcher
   web/
-    app.py             # FastAPI backend (~1800 lines)
-    state.py           # Shared state, data models, deal tracker, product hub
-    index.html         # Entire frontend (~6000 lines)
+    app.py               # FastAPI backend
+    state.py             # Shared state, data models, deal tracker, product hub
+    index.html           # Entire frontend (single file)
   monitors/
-    tcgplayer_monitor.py  # TCGPlayer price + listing scraper
-    ebay_monitor.py       # eBay/130point sold listing scraper
-    discord_monitor.py    # Discord REST API poller + DM sender
-    defaults.py           # Configurable defaults (UA, timeouts, browser)
-    walmart_monitor.py    # (Legacy) Walmart monitor
-    amazon_monitor.py     # (Legacy) Amazon monitor
-    target_monitor.py     # (Legacy) Target monitor
-    bestbuy_monitor.py    # (Legacy) Best Buy monitor
+    tcgplayer_monitor.py    # TCGPlayer price + listing scraper
+    ebay_monitor.py         # eBay/130point sold listing scraper
+    discord_monitor.py      # Discord REST API poller + DM sender
+    marketplace_monitor.py  # BST channel parser + product matcher
+    defaults.py             # Configurable defaults (UA, timeouts, browser)
+    walmart_monitor.py      # (Legacy) Walmart monitor
+    amazon_monitor.py       # (Legacy) Amazon monitor
+    target_monitor.py       # (Legacy) Target monitor
+    bestbuy_monitor.py      # (Legacy) Best Buy monitor
 ```
 
 ## Contributing
