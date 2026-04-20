@@ -147,13 +147,11 @@ python -m playwright install chromium
 
 ### Discord Setup
 
-**User Token** (required for monitoring channels):
-1. Open Discord in your **web browser** (not the desktop app)
-2. Press F12 > Network tab
-3. Filter for `messages`
-4. Click any channel to trigger a request
-5. Click the request > Headers > find `Authorization:` value
-6. Copy that token into Settings (gear icon) > User Token
+**Browser Login** (required for monitoring channels):
+1. Start the app — a Chrome window will open showing Discord's login page
+2. Log in with your Discord email, password, and 2FA if enabled
+3. Your session is saved automatically for future restarts
+4. The app opens a browser tab per monitored channel and watches for new messages in real-time
 
 **Bot Token** (optional, for DM notifications):
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
@@ -163,9 +161,10 @@ python -m playwright install chromium
 5. Enter your User ID in Settings > Discord > DM User ID
 
 **Channel IDs**:
-- Enable Developer Mode in Discord (Settings > Advanced)
-- Right-click a channel > Copy Channel ID
-- Add channels in the UI via Discord Feed > Options > Channels section
+- Right-click a channel in Discord > Copy Message Link (or Copy Link)
+- Use the full URL format: `https://discord.com/channels/SERVER_ID/CHANNEL_ID`
+- Or use `SERVER_ID/CHANNEL_ID` format
+- Add channels in Settings or directly in `config.json`
 
 ### Config Reference
 
@@ -181,11 +180,11 @@ python -m playwright install chromium
 | `stealth.page_timeout_ms` | int | 30000 | Browser page load timeout (ms) |
 | `stealth.network_timeout_seconds` | int | 15 | HTTP request timeout (seconds) |
 | `discord.enabled` | bool | false | Enable Discord channel monitoring |
-| `discord.token` | string | "" | Your Discord user token |
+| `discord.email` | string | "" | Discord login email (for browser monitoring) |
+| `discord.password` | string | "" | Discord login password |
 | `discord.bot_token` | string/null | null | Bot token for DM notifications |
 | `discord.dm_user_id` | string/null | null | Your Discord User ID for DM notifications |
-| `discord.poll_interval_seconds` | int | 30 | Discord polling interval (10-120 seconds) |
-| `discord.channels_to_monitor` | array | [] | Discord channel IDs to monitor |
+| `discord.channels_to_monitor` | array | [] | Channel URLs or server_id/channel_id pairs |
 | `discord.keywords` | array | [] | Manual keywords (auto-keywords from products) |
 | `discord.min_price` | number | 0 | Minimum price filter (0 = no filter) |
 | `discord.ignored_patterns` | array | [] | Substrings to auto-filter |

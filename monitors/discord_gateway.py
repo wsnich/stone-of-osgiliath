@@ -303,6 +303,15 @@ class DiscordGatewayMonitor:
             print("  [Discord GW] Use: https://discord.com/channels/SERVER_ID/CHANNEL_ID")
             return
 
+        # Build guild_id lookup from URLs
+        self._channel_guild: dict[str, str] = {}
+        for ch_id, url in channel_urls.items():
+            parts = url.split("/channels/")
+            if len(parts) >= 2:
+                segs = parts[1].split("/")
+                if len(segs) >= 2:
+                    self._channel_guild[ch_id] = segs[0]
+
         # Navigate the main page to the first channel
         first_id = next(iter(channel_urls))
         first_url = channel_urls[first_id]
@@ -514,11 +523,16 @@ class DiscordGatewayMonitor:
 
                         if (!content && embeds.length === 0) continue;
 
+                        // Extract guild_id from URL
+                        let urlParts2 = location.pathname.split('/');
+                        let guildId = urlParts2.length >= 3 ? urlParts2[2] : '';
+
                         newMsgs.push(JSON.stringify({
                             op: 0, t: 'MESSAGE_CREATE',
                             d: {
                                 id: msgId,
                                 channel_id: currentChannel,
+                                guild_id: guildId,
                                 author: { username: author, id: '', avatar: '' },
                                 content: content,
                                 timestamp: timestamp,

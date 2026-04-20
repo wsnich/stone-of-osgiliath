@@ -246,7 +246,6 @@ async def discord_gateway_loop():
         try:
             config = load_config()
             _discord_gw.update_channels(config)
-            token = config.get("discord", {}).get("token", "")
 
             await _discord_gw.poll_gateway_messages()
             raw_messages = await _discord_gw.drain_discord_queue()
@@ -311,7 +310,7 @@ async def discord_gateway_loop():
                     # DM notification
                     dm_user = config.get("discord", {}).get("dm_user_id")
                     bot_token = config.get("discord", {}).get("bot_token", "")
-                    dm_token = f"Bot {bot_token}" if bot_token else token
+                    dm_token = f"Bot {bot_token}" if bot_token else ""
                     if dm_user and dm_token:
                         title = entry.get("embeds", [{}])[0].get("title", "") if entry.get("embeds") else entry.get("content", "")[:80]
                         price = entry.get("price")
@@ -516,8 +515,7 @@ async def marketplace_gateway_loop():
                     # DM notification for below-market deals
                     dm_user = config.get("discord", {}).get("dm_user_id")
                     bot_token = config.get("discord", {}).get("bot_token", "")
-                    token = config.get("discord", {}).get("token", "")
-                    dm_token = f"Bot {bot_token}" if bot_token else token
+                    dm_token = f"Bot {bot_token}" if bot_token else ""
                     if dm_user and dm_token and intent == "WTS":
                         for item in matched:
                             pi = item.get("product_index")
@@ -1001,8 +999,8 @@ async def setup_status():
     """Check if the app needs initial setup."""
     config = load_config()
     dc = config.get("discord", {})
-    token = dc.get("token", "")
-    needs_setup = not token or "YOUR_" in token
+    email = dc.get("email", "")
+    needs_setup = not email or "YOUR_" in email
     return {"needs_setup": needs_setup}
 
 @app.get("/", response_class=HTMLResponse)
