@@ -1929,7 +1929,7 @@ select.form-input option { background: var(--surface2); }
     <div id="discord-keywords" style="display:none;padding:6px 16px 8px;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--border)"></div>
     <div id="discord-log-search" style="display:none;padding:8px 16px;border-bottom:1px solid var(--border)">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-        <input type="text" id="discord-log-query" placeholder="Search messages..." onkeydown="if(event.key==='Enter')searchDiscordLog()" style="flex:1;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:4px 8px">
+        <input type="text" id="discord-log-query" placeholder="Search audit log..." onkeydown="if(event.key==='Enter')searchDiscordLog()" style="flex:1;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:4px 8px">
         <select id="discord-log-filter" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:4px">
           <option value="">All</option>
           <option value="shown">Shown</option>
@@ -1940,9 +1940,7 @@ select.form-input option { background: var(--surface2); }
       <div id="discord-log-stats" style="font-size:10px;color:var(--muted);margin-bottom:4px"></div>
       <div id="discord-log-results" style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:3px"></div>
     </div>
-    <div class="reddit-list" id="discord-list">
-      <div class="reddit-empty">Waiting for messages...</div>
-    </div>
+    <div class="reddit-list" id="discord-list"></div>
   </div>
 </div>
 
@@ -6102,30 +6100,47 @@ const DISCORD_PREVIEW = 3;
 async function initDiscordFeed(posts) {
   discordPosts = posts || [];
 
-  // If no live posts yet, load recent shown messages from the audit log
+  // Pre-load channel names
+  await loadDiscordChannels();
+
+  // Load recent shown messages from the audit log
   if (!discordPosts.length) {
     try {
       const resp = await fetch('/api/discord/log?action=shown&limit=50');
-      const rows = await resp.json();
+      const data = await resp.json();
+      const rows = data.rows || data || [];
       for (const r of rows.reverse()) {
         discordPosts.push({
-          id: r.msg_id,
+          id: r.msg_id || r.id || '',
           author: r.author || '',
           content: r.content || '',
           timestamp: r.timestamp || r.logged_at || '',
           keywords: [],
           price: r.price,
-          embeds: r.embed_title ? [{ title: r.embed_title, fields: {} }] : [],
-          channel_name: r.channel_id ? ('##' + r.channel_id.slice(-4)) : '',
+          embeds: r.embed_title ? [{
+            title: r.embed_title,
+            description: '',
+            fields: _parseEmbedFieldsToList(r.embed_fields || ''),
+          }] : [],
+          channel_name: _channelNameCache[r.channel_id] || (r.channel_id ? ('##' + r.channel_id.slice(-4)) : ''),
         });
       }
-    } catch(e) {}
+    } catch(e) { console.warn('Failed to load discord history:', e); }
   }
 
   renderDiscordFeed();
-  // Always show Discord section when enabled
   document.getElementById('discord-section').style.display = '';
-  loadDiscordChannels();
+}
+
+function _parseEmbedFieldsToList(raw) {
+  // Parse "Name: Value\nName2: Value2" from audit log into [{name, value}] array
+  if (!raw) return [];
+  const fields = [];
+  for (const line of raw.split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx > 0) fields.push({ name: line.slice(0, idx).trim(), value: line.slice(idx + 1).trim() });
+  }
+  return fields;
 }
 
 function prependDiscordPost(post) {
@@ -6136,11 +6151,27 @@ function prependDiscordPost(post) {
   if (post.is_new) notifyDiscordPost(post);
 }
 
+function _getField(fields, ...names) {
+  // Get a field value from either object {Name: Value} or array [{name, value}] format
+  if (Array.isArray(fields)) {
+    for (const f of fields) {
+      for (const n of names) {
+        if ((f.name || '').toLowerCase() === n.toLowerCase()) return f.value;
+      }
+    }
+  } else if (fields && typeof fields === 'object') {
+    for (const n of names) {
+      if (fields[n]) return fields[n];
+    }
+  }
+  return '';
+}
+
 function _discordExtractRetailer(p) {
   // Extract retailer from embed fields, URL domain, or content
   for (const e of (p.embeds || [])) {
     const fields = e.fields || {};
-    const seller = fields.Seller || fields.seller || fields.Store || fields.store;
+    const seller = _getField(fields, 'Seller', 'seller', 'Store', 'store', 'Site', 'site');
     if (seller) return seller;
     const url = e.url || '';
     if (url.includes('walmart.com')) return 'Walmart';

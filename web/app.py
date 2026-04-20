@@ -1479,12 +1479,12 @@ async def get_discord_channels():
     config = load_config()
     dc = config.get("discord", {})
     channels = dc.get("channels_to_monitor", [])
-    token = dc.get("token", "")
     result = []
-    for ch_id in channels:
-        cid = str(ch_id)
+    for raw in channels:
+        # Parse guild_id/channel_id or full URL format
+        _, cid = _discord_gw._parse_channel(str(raw))
         name = _discord_gw.channel_names.get(cid) or _discord._channel_names.get(cid) or f"#{cid[-4:]}"
-        result.append({"id": cid, "name": name})
+        result.append({"id": str(raw), "name": name})
     return {"channels": result}
 
 @app.post("/api/discord/channels/add")
