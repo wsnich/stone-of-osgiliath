@@ -6099,14 +6099,32 @@ let discordPosts = [];
 let _discordExpanded = false;
 const DISCORD_PREVIEW = 3;
 
-function initDiscordFeed(posts) {
+async function initDiscordFeed(posts) {
   discordPosts = posts || [];
-  renderDiscordFeed();
-  // Show section if there are posts or config has discord enabled
-  if (discordPosts.length) {
-    document.getElementById('discord-section').style.display = '';
+
+  // If no live posts yet, load recent shown messages from the audit log
+  if (!discordPosts.length) {
+    try {
+      const resp = await fetch('/api/discord/log?action=shown&limit=50');
+      const rows = await resp.json();
+      for (const r of rows.reverse()) {
+        discordPosts.push({
+          id: r.msg_id,
+          author: r.author || '',
+          content: r.content || '',
+          timestamp: r.timestamp || r.logged_at || '',
+          keywords: [],
+          price: r.price,
+          embeds: r.embed_title ? [{ title: r.embed_title, fields: {} }] : [],
+          channel_name: r.channel_id ? ('##' + r.channel_id.slice(-4)) : '',
+        });
+      }
+    } catch(e) {}
   }
-  // Pre-load channel names for audit log display
+
+  renderDiscordFeed();
+  // Always show Discord section when enabled
+  document.getElementById('discord-section').style.display = '';
   loadDiscordChannels();
 }
 
