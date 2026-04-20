@@ -177,6 +177,8 @@ class DiscordGatewayMonitor:
 
         self._login_state = "logging_in"
         self._running = True
+        self._last_ws_activity = 0.0  # Reset so health check skips until first message
+        self._channel_pages = {}
 
         try:
             self._pw = await _playwright().start()
