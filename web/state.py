@@ -127,8 +127,8 @@ def _extract_retailer(msg: dict) -> str:
     """Extract retailer from a Discord message (embed fields, URL, or content)."""
     # Check embed fields first (most reliable)
     for e in msg.get("embeds", []):
-        fields = e.get("fields", {})
-        seller = fields.get("Seller", "") or fields.get("seller", "") or fields.get("Store", "") or fields.get("store", "")
+        fields = e.get("fields", [])
+        seller = _get_embed_field(fields, "Seller", "seller", "Store", "store", "Site", "site")
         if seller:
             return seller.strip()
         # Check URL domain
@@ -148,16 +148,21 @@ def _extract_retailer(msg: dict) -> str:
         if "barnesandnoble.com" in url:
             return "Barnes & Noble"
 
-    # Fallback: scan content
-    content = msg.get("content", "")
+    # Scan content, author name, embed text for retailer keywords
+    text_parts = [msg.get("content", ""), msg.get("author", "")]
     for e in msg.get("embeds", []):
-        content += " " + e.get("title", "") + " " + e.get("description", "")
-    content_lower = content.lower()
+        text_parts.append(e.get("title", ""))
+        text_parts.append(e.get("description", ""))
+        footer = e.get("footer", {})
+        if isinstance(footer, dict):
+            text_parts.append(footer.get("text", ""))
+    content_lower = " ".join(text_parts).lower()
     retailer_map = [
         ("walmart", "Walmart"), ("amazon", "Amazon"), ("target", "Target"),
         ("best buy", "Best Buy"), ("bestbuy", "Best Buy"), ("tcgplayer", "TCGPlayer"),
         ("gamestop", "GameStop"), ("barnes", "Barnes & Noble"),
         ("costco", "Costco"), ("meijer", "Meijer"), ("walgreens", "Walgreens"),
+        ("mattel", "Mattel Creations"), ("pokemon center", "Pokemon Center"),
     ]
     for kw, name in retailer_map:
         if kw in content_lower:
@@ -167,14 +172,45 @@ def _extract_retailer(msg: dict) -> str:
 
 def _extract_product_name(msg: dict) -> str:
     """Extract the best product name from a Discord message."""
-    # Prefer embed title (most structured)
     for e in msg.get("embeds", []):
-        if e.get("title"):
-            return e["title"].strip()
+        fields = e.get("fields", [])
+        # Check embed fields for explicit "Product" field (Refract, Valor bots)
+        product_field = _get_embed_field(fields, "Product", "Item", "product", "item")
+        if product_field:
+            return product_field.strip()[:120]
+        # Use embed title if it's a real product name (not "New Checkout" etc.)
+        title = (e.get("title") or "").strip()
+        skip_titles = {"new checkout", "checked out", "checkout", "success", ""}
+        if title and title.lower().rstrip("! 🎉") not in skip_titles:
+            return title[:120]
+        # Try embed description (Valor: "Checked Out! 🎉 Product Name")
+        desc = (e.get("description") or "").strip()
+        if desc:
+            # Strip common prefixes
+            for prefix in ["Checked Out!", "Checked Out", "New Checkout!", "New Checkout"]:
+                if desc.startswith(prefix):
+                    desc = desc[len(prefix):].strip().lstrip("🎉").strip()
+                    break
+            if desc:
+                return desc[:120]
     # Fallback: message content (first line)
     content = msg.get("content", "").strip()
     first_line = content.split("\n")[0].strip()
     return first_line[:120] if first_line else "Unknown Product"
+
+
+def _get_embed_field(fields, *names) -> str:
+    """Get a field value from either [{name,value}] or {name:value} format."""
+    if isinstance(fields, list):
+        for f in fields:
+            for n in names:
+                if (f.get("name") or "").lower() == n.lower():
+                    return f.get("value", "")
+    elif isinstance(fields, dict):
+        for n in names:
+            if fields.get(n):
+                return fields[n]
+    return ""
 
 
 def _extract_url(msg: dict) -> str:
@@ -192,6 +228,9 @@ def _extract_image(msg: dict) -> Optional[str]:
     for e in msg.get("embeds", []):
         if e.get("image"):
             return e["image"]
+        thumb = e.get("thumbnail", {})
+        if isinstance(thumb, dict) and thumb.get("url"):
+            return thumb["url"]
     return None
 
 
@@ -212,11 +251,18 @@ def _extract_checkout_links(msg: dict) -> list[dict]:
         for match in _re.finditer(r'\[([^\]]+)\]\((https?://[^)]+)\)', text):
             label, url = match.group(1), match.group(2)
             # Filter to actual checkout/cart links
-            is_cart = any(kw in url.lower() for kw in [
-                'cart', 'add.html', 'offers.zephr', 'refractbot.com/setup',
-                '/click/', 'checkout',
+            url_lower = url.lower()
+            # Exclude bot task/setup links (not real checkout links)
+            is_bot_link = any(kw in url_lower for kw in [
+                'refractbot.com', 'valoraio.com', 'task', 'setup',
+            ])
+            if is_bot_link:
+                continue
+            is_cart = any(kw in url_lower for kw in [
+                'cart', 'add.html', 'offers.zephr',
+                '/click/', 'checkout', 'atc',
             ]) or any(kw in label.lower() for kw in [
-                'atc', 'add to cart', 'checkout', 'click here', 'buy',
+                'atc', 'add to cart', 'checkout', 'buy',
             ])
             if is_cart and url not in _seen:
                 _seen.add(url)
