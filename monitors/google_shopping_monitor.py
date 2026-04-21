@@ -189,6 +189,7 @@ class GoogleShoppingMonitor:
                             // Skip non-retailer text
                             if (p.match(/^(Free|Rated|\\d+-day|Current|Was |Usually |Pre-owned|Foreign)/i)) continue;
                             if (p.match(/^(\\d+ review|delivery|return|more$|\\d+ out of)/i)) continue;
+                            if (p.length <= 2) continue;  // Skip "ae", "com" etc.
                             retailer = p.replace(/ & more$/, '').trim();
                             break;
                         }

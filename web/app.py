@@ -34,6 +34,7 @@ from monitors.marketplace_monitor import (
     parse_intent, is_noise, extract_prices, match_to_products, MarketplaceListing
 )
 from monitors.discord_gateway import DiscordGatewayMonitor
+import aiosqlite
 import db as price_db
 
 from monitors.google_shopping_monitor import GoogleShoppingMonitor
@@ -2326,6 +2327,13 @@ async def get_shopping_results(product_index: int = -1, major: bool = False, lim
 async def get_shopping_retailers():
     return await price_db.get_google_shopping_retailers()
 
+@app.delete("/api/google-shopping/{result_id}")
+async def delete_shopping_result(result_id: int):
+    async with aiosqlite.connect(price_db.DB_PATH) as db:
+        await db.execute("DELETE FROM google_shopping_results WHERE id = ?", (result_id,))
+        await db.commit()
+    return {"status": "ok"}
+
 @app.post("/api/google-shopping/refresh/{index}")
 async def refresh_google_shopping(index: int):
     if index < 0 or index >= len(app_state.product_statuses):
@@ -2343,6 +2351,10 @@ async def refresh_google_shopping(index: int):
     tcg_market = ps.price
     indie_results = []
 
+    # Clear old results for this product before recording new ones
+    async with aiosqlite.connect(price_db.DB_PATH) as _db:
+        await _db.execute("DELETE FROM google_shopping_results WHERE product_index = ?", (index,))
+        await _db.commit()
     indie_results = await _record_shopping_results(results, ps, index, ts, tcg_market)
     await app_state.update_product(index, google_shopping=indie_results, google_shopping_checked=ts)
     return {"status": "ok", "results": len(indie_results)}
@@ -2484,6 +2496,10 @@ async def google_shopping_loop():
 
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 tcg_market = ps.price
+                # Clear old results for this product
+                async with aiosqlite.connect(price_db.DB_PATH) as _db:
+                    await _db.execute("DELETE FROM google_shopping_results WHERE product_index = ?", (i,))
+                    await _db.commit()
                 indie_results = await _record_shopping_results(
                     results, ps, i, ts, tcg_market, min_discount)
                 await app_state.update_product(i, google_shopping=indie_results, google_shopping_checked=ts)
