@@ -103,8 +103,8 @@ Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 ## Requirements
 
 - **Python 3.10+** (uses `dict | None` type hint syntax)
-- **Chrome or Chromium browser** (for TCGPlayer and eBay scraping via Patchright/Playwright)
-- **Discord user token** (for monitoring deal channels)
+- **Chrome or Chromium browser** (for TCGPlayer, eBay scraping, and Discord monitoring via Patchright/Playwright)
+- **Discord account** (email/password — the app opens Discord in a browser window)
 - **Discord bot token** (optional, for DM push notifications)
 
 ## Quick Start (Windows)
@@ -112,7 +112,7 @@ Built for Magic: The Gathering, Pokemon, Yu-Gi-Oh, Riftbound, Lorcana, and more.
 1. Install [Python 3.10+](https://www.python.org/downloads/) — **check "Add Python to PATH"** during installation
 2. Download this repo (Code → Download ZIP) and extract it, or `git clone https://github.com/wsnich/stone-of-osgiliath.git`
 3. Double-click **`setup.bat`** — installs all dependencies automatically
-4. Edit `config.json` to add your Discord token (see Discord Setup below), or use the in-app setup wizard
+4. Edit `config.json` with your Discord email/password (see Discord Setup below), or use the in-app setup wizard
 5. Double-click **`start.bat`** to run the app
 6. Open **http://localhost:8888** in your browser
 
@@ -256,13 +256,15 @@ stone-of-osgiliath/
   monitors/
     tcgplayer_monitor.py    # TCGPlayer price + listing scraper
     ebay_monitor.py         # eBay/130point sold listing scraper
-    discord_monitor.py      # Discord REST API poller + DM sender
+    discord_gateway.py      # Discord browser-based DOM scraper (one tab per channel)
+    discord_monitor.py      # Discord message filtering + DM sender
     marketplace_monitor.py  # BST channel parser + product matcher
     defaults.py             # Configurable defaults (UA, timeouts, browser)
-    walmart_monitor.py      # (Legacy) Walmart monitor
-    amazon_monitor.py       # (Legacy) Amazon monitor
-    target_monitor.py       # (Legacy) Target monitor
-    bestbuy_monitor.py      # (Legacy) Best Buy monitor
+  research/
+    agent.py                # AI research agent (Anthropic SDK)
+    tools.py                # Agent tool definitions
+    queries.py              # Read-only DB access for agent
+    prompts/                # System + weekly research prompts
 ```
 
 ## Contributing

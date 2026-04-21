@@ -32,13 +32,17 @@ stone-of-osgiliath/
   monitors/
     tcgplayer_monitor.py     (636 lines)   — TCGPlayer browser scraper
     ebay_monitor.py          (479 lines)   — eBay/130point sold listing scraper
-    discord_monitor.py       (298 lines)   — Discord REST API poller + DM sender
+    discord_gateway.py       (~350 lines)  — Discord browser-based DOM scraper (one tab per channel)
+    discord_monitor.py       (~230 lines)  — Discord message filtering + DM sender
     marketplace_monitor.py   (170 lines)   — BST channel parser + product matcher
     defaults.py              (38 lines)    — Configurable defaults (UA, timeouts, browser)
-    walmart_monitor.py       (1,308 lines) — (Legacy) Walmart monitor
-    amazon_monitor.py        (766 lines)   — (Legacy) Amazon monitor
-    target_monitor.py        (436 lines)   — (Legacy) Target monitor
-    bestbuy_monitor.py       (354 lines)   — (Legacy) Best Buy monitor
+
+  research/
+    agent.py                                — AI research agent (Anthropic SDK tool-use loop)
+    tools.py                                — Agent tool definitions (query_db, read_codebase, etc.)
+    queries.py                              — Read-only DB access + scoped writes to research_findings
+    prompts/system.md                       — Agent system prompt
+    prompts/weekly_research.md              — Weekly research task prompt
 ```
 
 ---
@@ -146,16 +150,19 @@ ingest(msg) → TrackedDeal (new or matched existing)
 ## Background Tasks (web/app.py)
 
 ### monitor_loop()
-Checks TCGPlayer/eBay products on schedule. Per-product intervals: TCGPlayer singles 6hr, graded 7 days (configurable), global fallback. Max 4 concurrent checks. Pagination sanity check prevents false listing count drops.
+Checks TCGPlayer/eBay products on schedule. Per-product intervals: sealed 30min default, singles 6hr, graded 7 days (configurable), per-product override. Max 4 concurrent checks. Pagination sanity check (85% DOM, 80% previous) prevents false listing count drops.
 
-### discord_poll_loop()
-Polls Discord channels every 10-120s (configurable). Filters by keywords, min price, ignored patterns, blocked retailers. Ingests into deal tracker. Auto-assigns to watchlist. Sends DM notifications. Logs to audit table. Feeds retailer intelligence.
+### discord_gateway_loop()
+Monitors Discord channels via browser-based DOM scraping. Opens a visible Chrome window with one tab per monitored channel. Polls each tab's DOM every 3 seconds for new message elements. Extracts author, content, embeds (with links), and timestamps. Filters by keywords, min price, ignored patterns, blocked retailers. Ingests into deal tracker. Auto-assigns to watchlist. Sends DM notifications via bot token. Logs to audit table. Feeds retailer intelligence. Auto-clicks "Jump to present" after 5 minutes of channel inactivity.
 
-### marketplace_poll_loop()
-Polls BST channels every 30s. Parses WTS/WTB intent, extracts prices, matches against tracked TCGPlayer products. DM alerts for deals >15% below market.
+### marketplace_gateway_loop()
+Processes BST channel messages from the Discord Gateway. Parses WTS/WTB intent, extracts prices, matches against tracked TCGPlayer products. DM alerts for deals >15% below market.
 
 ### reddit_poll_loop()
 Polls configurable subreddits every 30-300s. Supports multiple subreddits.
+
+### research_loop()
+Runs the AI research agent on a configurable schedule (default weekly). Analyzes SQLite data and codebase, generates evidence-backed feature recommendations. Requires Anthropic API key.
 
 ---
 
@@ -194,15 +201,16 @@ Polls configurable subreddits every 30-300s. Supports multiple subreddits.
 
 ## Data Flow: Discord Message → Deal
 
-1. `discord_poll_loop` fetches 25 messages per channel via REST API
-2. Filter: keywords, min_price, ignored_patterns, blocked_retailers
-3. Log to `discord_log` table (shown + filtered)
-4. Ingest into `DealTracker` (Jaccard similarity grouping, threshold 0.40)
-5. Extract: retailer (from embeds/URLs), game, checkout links, product URL
-6. Auto-assign to watchlist items (threshold 0.55)
-7. Record to `retailer_sightings` table
-8. DM notification if price < TCGPlayer market * 0.85
-9. Broadcast via WebSocket to UI
+1. `discord_gateway_loop` polls DOM of each Discord browser tab (one per monitored channel)
+2. New message elements extracted: author, content, embeds (with links/fields), timestamp
+3. `filter_message()` applies: keywords, min_price, ignored_patterns (with watchlist bypass), blocked_retailers
+4. Log to `discord_log` table (shown + filtered)
+5. Ingest into `DealTracker` (Jaccard similarity grouping, threshold 0.40)
+6. Extract: product name (from embed Product field or title), retailer (from Site/Seller fields, author, URLs), checkout links (ATC/Zephr, excluding bot task links), game detection
+7. Auto-assign to watchlist items (threshold 0.55)
+8. Record to `retailer_sightings` table (with normalized retailer names)
+9. DM notification via bot token if price < TCGPlayer market * 0.85
+10. Broadcast via WebSocket to UI
 
 ## Data Flow: TCGPlayer Check → Analysis
 
@@ -223,15 +231,16 @@ Polls configurable subreddits every 30-300s. Supports multiple subreddits.
 
 ```json
 {
-  "check_interval_seconds": 300,
+  "check_interval_seconds": 1800,
   "graded_interval_seconds": 604800,
   "data_dir": null,
   "stealth": { "jitter_pct", "headless", "user_agent", "browser_channel", "page_timeout_ms", "network_timeout_seconds" },
   "schedule": { "enabled", "start", "end" },
   "products": [{ "name", "url", "site", "max_price", "enabled", "tags", "image_url" }],
-  "discord": { "enabled", "token", "bot_token", "dm_user_id", "channels_to_monitor", "keywords", "disabled_keywords", "ignored_patterns", "blocked_retailers", "min_price", "poll_interval_seconds" },
-  "marketplace": { "enabled", "sell_channels", "buy_channels", "poll_interval_seconds" },
-  "reddit": { "subreddits", "poll_interval_seconds" }
+  "discord": { "enabled", "email", "password", "bot_token", "dm_user_id", "channels_to_monitor", "keywords", "disabled_keywords", "ignored_patterns", "blocked_retailers", "min_price" },
+  "marketplace": { "enabled", "sell_channels", "buy_channels" },
+  "reddit": { "subreddits", "poll_interval_seconds" },
+  "research": { "enabled", "api_key", "interval_hours", "lookback_days", "max_findings", "model" }
 }
 ```
 
@@ -239,15 +248,15 @@ Polls configurable subreddits every 30-300s. Supports multiple subreddits.
 
 ## Known Technical Debt
 
-1. **Partial listing capture** — TCGPlayer pagination sometimes fails; sanity check catches most but not all cases
+1. **Partial listing capture** — TCGPlayer pagination sometimes fails; sanity check (85% DOM, 80% previous) catches most but not all cases
 2. **No rate limiting/backoff** — rapid retries if site is down could trigger IP bans
-3. **Discord poll-based** — misses messages when app is stopped; limited to last 25 per channel
-4. **Marketplace parser is regex-based** — free-text parsing is fragile for unusual formats
-5. **eBay ignored titles exact-match only** — doesn't learn phrases, just individual words
-6. **Portfolio not fully built** — exists but lacks auto-valuation and P&L calculations
-7. **Legacy monitor files** — walmart/amazon/target/bestbuy monitors exist but aren't imported
-8. **Single HTML file** — 7000 lines; no component framework, no build step
-9. **No tests** — two manual test files, no pytest/CI
-10. **Discord token in plain config** — .gitignore protects it but no encryption
+3. **Discord browser resource usage** — one Chrome tab per monitored channel; ~200-400MB RAM for the Discord browser instance
+4. **Discord session management** — browser session can expire; "Jump to present" auto-click handles stale views but manual re-login may be needed
+5. **Marketplace parser is regex-based** — free-text parsing is fragile for unusual formats
+6. **eBay ignored titles exact-match only** — doesn't learn phrases, just individual words
+7. **Portfolio not fully built** — exists but lacks auto-valuation and P&L calculations
+8. **Single HTML file** — 7000+ lines; no component framework, no build step
+9. **No tests** — no pytest/CI
+10. **Discord credentials in plain config** — .gitignore protects it but no encryption
 11. **WebSocket has no reconnection backoff** — client retries every 3s on disconnect
 12. **Listing prices stored as JSON blob** — not indexed; queries slow for large datasets
