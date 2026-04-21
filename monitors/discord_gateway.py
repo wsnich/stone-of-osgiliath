@@ -438,6 +438,15 @@ class DiscordGatewayMonitor:
     async def _poll_page(self, page, channel_id: str):
         """Scan a single page tab for new messages."""
         try:
+            # Auto-click "Jump to present" if Discord fell behind
+            try:
+                jump_btn = await page.query_selector('[class*="jumpToPresentBar" i], [class*="newMessagesBar" i]')
+                if jump_btn:
+                    await jump_btn.click()
+                    await asyncio.sleep(1)
+            except Exception:
+                pass
+
             result = await page.evaluate("""(chId) => {
                 // Initialize seen set if needed
                 if (!window._gwSeenIds) window._gwSeenIds = new Set();
