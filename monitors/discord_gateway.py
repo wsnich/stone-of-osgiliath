@@ -438,14 +438,18 @@ class DiscordGatewayMonitor:
     async def _poll_page(self, page, channel_id: str):
         """Scan a single page tab for new messages."""
         try:
-            # Auto-click "Jump to present" if Discord fell behind
-            try:
-                jump_btn = await page.query_selector('[class*="jumpToPresentBar" i], [class*="newMessagesBar" i]')
-                if jump_btn:
-                    await jump_btn.click()
-                    await asyncio.sleep(1)
-            except Exception:
-                pass
+            # Auto-click "Jump to present" if no messages for 5+ minutes on this tab
+            last_key = f"_last_msg_{channel_id}"
+            last_msg_time = getattr(self, last_key, 0)
+            if last_msg_time and time.time() - last_msg_time > 300:
+                try:
+                    jump_btn = await page.query_selector('[class*="jumpToPresentBar" i], [class*="newMessagesBar" i]')
+                    if jump_btn:
+                        await jump_btn.click()
+                        await asyncio.sleep(1)
+                        setattr(self, last_key, time.time())  # Reset timer after clicking
+                except Exception:
+                    pass
 
             result = await page.evaluate("""(chId) => {
                 // Initialize seen set if needed
@@ -641,6 +645,9 @@ class DiscordGatewayMonitor:
             msgs = result.get("msgs", [])
             if msgs:
                 self._last_ws_activity = time.time()
+                setattr(self, f"_last_msg_{channel_id}", time.time())
+            elif not getattr(self, f"_last_msg_{channel_id}", 0):
+                setattr(self, f"_last_msg_{channel_id}", time.time())  # Initialize on first poll
             for raw in msgs:
                 self._process_raw_message(raw)
         except Exception:
