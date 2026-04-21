@@ -7258,19 +7258,19 @@ function renderShoppingResults(results) {
         <span style="font-size:13px;font-weight:600;flex:1">${_esc(group.name)}</span>
         ${market ? `<span style="font-size:10px;color:var(--muted)">TCG Market: $${market.toFixed(2)}</span>` : ''}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1.2fr 70px 55px 70px 70px 24px;gap:4px;font-size:9px;color:var(--muted);font-weight:600;text-transform:uppercase;padding:0 4px 4px;border-bottom:1px solid var(--border)">
-        <span>Retailer</span><span>Found Product</span><span>Price</span><span>Ship</span><span>Total</span><span>vs Mkt</span><span></span>
-      </div>
       ${sorted.map(r => {
         const disc = r.discount_pct;
         const discColor = disc > 15 ? 'var(--green)' : disc > 5 ? 'var(--accent)' : 'var(--muted)';
-        return `<div style="display:grid;grid-template-columns:1fr 1.2fr 70px 55px 70px 70px 24px;gap:4px;padding:4px;font-size:11px;border-bottom:1px solid var(--border);align-items:center">
-          <a href="${_esc(r.product_url)}" target="_blank" style="color:var(--blue);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${_esc(r.retailer)}</a>
-          <span style="color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_esc(r.result_title)}">${_esc(r.result_title || '')}</span>
-          <span>$${r.result_price ? r.result_price.toFixed(2) : '?'}</span>
-          <span style="color:var(--muted);font-size:10px">${r.shipping_price === 0 ? 'Free' : r.shipping_price ? '$' + r.shipping_price.toFixed(2) : '?'}</span>
-          <span style="font-weight:600">$${r.total_price ? r.total_price.toFixed(2) : '?'}</span>
-          <span style="color:${discColor};font-weight:600;font-size:10px">${disc ? disc.toFixed(0) + '%' : ''}</span>
+        return `<div style="display:flex;gap:8px;padding:6px 4px;font-size:11px;border-bottom:1px solid var(--border);align-items:center">
+          <div style="flex:1;min-width:0">
+            <a href="${_esc(r.product_url)}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${_esc(r.retailer)}</a>
+            <div style="color:var(--muted);font-size:10px;line-height:1.3;margin-top:1px">${_esc(r.result_title || '')}</div>
+          </div>
+          <div style="text-align:right;white-space:nowrap;min-width:70px">
+            <div style="font-weight:600">\$${r.total_price ? r.total_price.toFixed(2) : '?'}</div>
+            <div style="font-size:9px;color:var(--muted)">${r.shipping_price === 0 ? 'Free ship' : r.shipping_price ? '+$' + r.shipping_price.toFixed(2) : ''}</div>
+          </div>
+          <span style="color:${discColor};font-weight:600;font-size:10px;min-width:40px;text-align:right">${disc ? disc.toFixed(0) + '%' : ''}</span>
           <button onclick="dismissShoppingResult(${r.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px;padding:0" title="Remove">✕</button>
         </div>`;
       }).join('')}

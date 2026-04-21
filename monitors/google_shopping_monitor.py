@@ -173,10 +173,16 @@ class GoogleShoppingMonitor:
                         if (!priceMatch) continue;
                         const price = priceMatch[1];
 
-                        // Extract title (text before "Current Price")
+                        // Extract full title (text before "Current Price" or "Also nearby")
                         let title = '';
-                        const titleMatch = label.match(/^(.+?)\\. (?:Also|Current Price)/);
-                        if (titleMatch) title = titleMatch[1].trim();
+                        const titleMatch = label.match(/^(.+?)\\. (?:Also nearby|Current Price)/);
+                        if (titleMatch) {
+                            title = titleMatch[1].trim();
+                        } else {
+                            // Fallback: everything before "Current Price"
+                            const idx = label.indexOf('Current Price');
+                            if (idx > 0) title = label.substring(0, idx).replace(/\\.\\s*$/, '').trim();
+                        }
 
                         // Extract retailer (text after price, before shipping/rating info)
                         let retailer = '';
