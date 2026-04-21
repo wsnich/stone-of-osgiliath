@@ -130,12 +130,15 @@ class GoogleShoppingMonitor:
                 # Save debug screenshot + HTML for selector analysis
                 try:
                     await page.screenshot(path="google_shopping_search.png")
-                    html = await page.content()
-                    with open("google_shopping_page.html", "w", encoding="utf-8") as f:
-                        f.write(html)
-                    log.info("Saved: google_shopping_search.png + google_shopping_page.html")
                 except Exception:
                     pass
+                try:
+                    from pathlib import Path as _P
+                    html = await page.content()
+                    _P("google_shopping_page.html").write_text(html, encoding="utf-8")
+                    print(f"  [Shopping] HTML saved: {len(html)} bytes")
+                except Exception as e:
+                    print(f"  [Shopping] HTML save failed: {e}")
 
                 # Diagnostic: dump first 10 links with their text
                 diag = await page.evaluate("""() => {
@@ -152,104 +155,71 @@ class GoogleShoppingMonitor:
                 for i, l in enumerate(diag[:5]):
                     print(f"  [Shopping] Link {i}: text='{l.get('text', '')[:80]}' href={l.get('href', '')[:60]}")
 
-                # Extract product cards from Google Shopping results
+                # Extract product data from aria-label attributes
+                # Google Shopping stores structured data in aria-labels:
+                # "Product Title. Current Price: $X. Retailer. Shipping. Rating."
                 raw = await page.evaluate("""() => {
                     const results = [];
-                    const debug = [];
+                    const seen = new Set();
 
-                    // Find all links — use broad selector, filter by content
-                    const anchors = document.querySelectorAll('a[href]');
-                    const processed = new Set();
+                    // Find all elements with aria-label containing price data
+                    const els = document.querySelectorAll('[aria-label*="Current Price"]');
 
-                    for (const a of anchors) {
-                        const url = a.href;
-                        if (processed.has(url)) continue;
-                        // Skip Google internal navigation links
-                        if (url.includes('google.com/search') || url.includes('accounts.google') ||
-                            url.includes('support.google') || url.includes('policies.google') ||
-                            url.startsWith('#') || url.includes('/preferences') ||
-                            url.includes('maps.google')) continue;
+                    for (const el of els) {
+                        const label = el.getAttribute('aria-label') || '';
 
-                        // Walk up to find a container with product info
-                        let card = a;
-                        for (let i = 0; i < 8; i++) {
-                            if (!card.parentElement) break;
-                            // Stop if we hit a very large container
-                            if (card.parentElement.querySelectorAll('a[href]').length > 10) break;
-                            card = card.parentElement;
-                        }
-
-                        const text = card.textContent || '';
-                        // Must have a price
-                        const priceMatch = text.match(/\\$(\\d[\\d,.]*\\.\\d{2})/);
+                        // Parse: "Title. Current Price: $X. Retailer. Shipping..."
+                        const priceMatch = label.match(/Current Price: \\$(\\d[\\d,.]+)/);
                         if (!priceMatch) continue;
+                        const price = priceMatch[1];
 
-                        processed.add(url);
-
-                        // Get leaf text nodes for structured parsing
-                        const leaves = [];
-                        function getLeaves(el) {
-                            if (el.children.length === 0) {
-                                const t = el.textContent.trim();
-                                if (t && t.length > 1) leaves.push(t);
-                            } else {
-                                for (const c of el.children) getLeaves(c);
-                            }
-                        }
-                        getLeaves(card);
-
-                        // Parse card: find title, retailer, shipping from leaf nodes
-                        let retailer = '';
+                        // Extract title (text before "Current Price")
                         let title = '';
+                        const titleMatch = label.match(/^(.+?)\\. (?:Also|Current Price)/);
+                        if (titleMatch) title = titleMatch[1].trim();
+
+                        // Extract retailer (text after price, before shipping/rating info)
+                        let retailer = '';
+                        const afterPrice = label.substring(label.indexOf(price) + price.length);
+                        // Split on periods and find retailer name
+                        const parts = afterPrice.split(/\\.\\s*/);
+                        for (const part of parts) {
+                            const p = part.trim().replace(/&amp;/g, '&');
+                            if (!p || p.length < 3) continue;
+                            // Skip non-retailer text
+                            if (p.match(/^(Free|Rated|\\d+-day|Current|Was |Usually |Pre-owned|Foreign)/i)) continue;
+                            if (p.match(/^(\\d+ review|delivery|return|more$)/i)) continue;
+                            retailer = p.replace(/ & more$/, '').trim();
+                            break;
+                        }
+
+                        if (!retailer || !price) continue;
+
+                        // Deduplicate by retailer+price
+                        const key = retailer.toLowerCase() + '_' + price;
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+
+                        // Find the closest link for the URL
+                        let url = '';
+                        const link = el.closest('a[href]') || el.querySelector('a[href]');
+                        if (link) url = link.href;
+
+                        // Shipping info
                         let shipping = '';
-                        let foundPrice = false;
-
-                        for (const leaf of leaves) {
-                            if (leaf.startsWith('$') || leaf.match(/^\\d+\\.\\d{2}$/)) {
-                                foundPrice = true;
-                                continue;
-                            }
-                            if (!foundPrice && leaf.length > 20 && !title) {
-                                title = leaf;
-                                continue;
-                            }
-                            if (foundPrice && !retailer &&
-                                leaf.length >= 3 && leaf.length <= 50 &&
-                                !leaf.startsWith('$') && !leaf.includes('★') &&
-                                !leaf.match(/^(free|\\d|sponsored|sale|ad|more|compare|see|view|show|sort|filter|buy|visit)/i) &&
-                                !leaf.match(/^(magic|pokemon|the |mtg |marvel|collector|booster|secrets)/i) &&
-                                !leaf.match(/(delivery|shipping|day|pre-owned|condition|results)/i)) {
-                                retailer = leaf;
-                                continue;
-                            }
-                            if (foundPrice && !shipping) {
-                                const ll = leaf.toLowerCase();
-                                if (ll.includes('free delivery') || ll.includes('free shipping')) {
-                                    shipping = 'free';
-                                }
-                            }
+                        if (label.toLowerCase().includes('free delivery') || label.toLowerCase().includes('free shipping')) {
+                            shipping = 'free';
                         }
 
-                        debug.push({
-                            leaves: leaves.slice(0, 10),
-                            retailer, title: (title || '').substring(0, 50),
-                            url: url.substring(0, 60),
-                        });
+                        // Image
+                        let image = '';
+                        const img = el.querySelector('img[src*="http"]');
+                        if (img) image = img.src;
 
-                        const img = card.querySelector('img[src*="http"]');
-                        if (retailer) {
-                            results.push({
-                                title: (title || '').substring(0, 200),
-                                price: '$' + priceMatch[1],
-                                retailer,
-                                url,
-                                shipping,
-                                image: img ? img.src : '',
-                            });
-                        }
+                        results.push({ title, price: '$' + price, retailer, url, shipping, image });
                     }
 
-                    return { results, debug: debug.slice(0, 20), count: results.length };
+                    return { results, count: results.length };
                 }""")
 
                 search_results = raw.get("results", []) if raw else []
