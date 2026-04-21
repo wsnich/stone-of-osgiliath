@@ -2343,10 +2343,22 @@ async def refresh_google_shopping(index: int):
     tcg_market = ps.price
     indie_results = []
 
+    indie_results = await _record_shopping_results(results, ps, index, ts, tcg_market)
+    await app_state.update_product(index, google_shopping=indie_results, google_shopping_checked=ts)
+    return {"status": "ok", "results": len(indie_results)}
+
+
+async def _record_shopping_results(results, ps, index, ts, tcg_market, min_discount=0):
+    """Record Google Shopping results to DB and retailer intelligence. Returns indie results."""
+    indie_results = []
+    tags = ps.tags or {}
+    game = tags.get("game") or _detect_game_from_name(ps.name)
+
     for r in results:
         discount = None
         if tcg_market and r.total:
             discount = round(((tcg_market - r.total) / tcg_market) * 100, 1)
+
         await price_db.record_google_shopping(
             product_name=ps.name, product_index=index,
             result_title=r.title, result_price=r.price,
@@ -2356,15 +2368,42 @@ async def refresh_google_shopping(index: int):
             is_major=r.is_major, tcg_market=tcg_market,
             discount_pct=discount, checked_at=ts,
         )
-        if not r.is_major:
+
+        # Feed into retailer intelligence (same table as Discord-sourced sightings)
+        retailer_name = _normalize_retailer(r.retailer) if r.retailer else r.domain
+        await price_db.record_retailer_sighting(
+            product_name=ps.name, game=game,
+            retailer=retailer_name,
+            price=r.total or r.price,
+            asin=None, product_url=r.url, checkout_url=None,
+            channel_id="google_shopping", msg_id=f"gs_{index}_{ts}",
+            timestamp=ts,
+        )
+
+        if not r.is_major and (not min_discount or (discount and discount >= min_discount)):
             indie_results.append({
                 "title": r.title, "price": r.price, "shipping": r.shipping,
                 "total": r.total, "retailer": r.retailer, "domain": r.domain,
                 "url": r.url, "image_url": r.image_url, "discount_pct": discount,
             })
 
-    await app_state.update_product(index, google_shopping=indie_results, google_shopping_checked=ts)
-    return {"status": "ok", "results": len(indie_results)}
+    return indie_results
+
+
+def _detect_game_from_name(name: str) -> Optional[str]:
+    """Simple game detection from product name."""
+    n = name.lower()
+    if any(k in n for k in ('magic', 'mtg', 'strixhaven', 'secret lair', 'spider-man')):
+        return 'MTG'
+    if any(k in n for k in ('pokemon', 'pokémon', 'pikachu')):
+        return 'Pokemon'
+    if 'riftbound' in n:
+        return 'Riftbound'
+    if any(k in n for k in ('yu-gi-oh', 'yugioh')):
+        return 'Yu-Gi-Oh'
+    if 'lorcana' in n:
+        return 'Lorcana'
+    return None
 
 
 async def google_shopping_loop():
@@ -2407,28 +2446,8 @@ async def google_shopping_loop():
 
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 tcg_market = ps.price
-                indie_results = []
-
-                for r in results:
-                    discount = None
-                    if tcg_market and r.total:
-                        discount = round(((tcg_market - r.total) / tcg_market) * 100, 1)
-                    await price_db.record_google_shopping(
-                        product_name=ps.name, product_index=i,
-                        result_title=r.title, result_price=r.price,
-                        shipping_price=r.shipping, total_price=r.total,
-                        retailer=r.retailer, retailer_domain=r.domain,
-                        product_url=r.url, image_url=r.image_url,
-                        is_major=r.is_major, tcg_market=tcg_market,
-                        discount_pct=discount, checked_at=ts,
-                    )
-                    if not r.is_major and discount and discount >= min_discount:
-                        indie_results.append({
-                            "title": r.title, "price": r.price, "shipping": r.shipping,
-                            "total": r.total, "retailer": r.retailer, "domain": r.domain,
-                            "url": r.url, "image_url": r.image_url, "discount_pct": discount,
-                        })
-
+                indie_results = await _record_shopping_results(
+                    results, ps, i, ts, tcg_market, min_discount)
                 await app_state.update_product(i, google_shopping=indie_results, google_shopping_checked=ts)
 
                 if indie_results:
