@@ -1886,7 +1886,7 @@ select.form-input option { background: var(--surface2); }
     <div class="reddit-header">
       <span class="reddit-title">Discord Feed</span>
       <span style="background:#5865f2;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px">Discord</span>
-      <select id="discord-sort" onchange="renderDiscordFeed(); if(_discordOptsVisible) searchDiscordLog()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:2px 4px;margin-left:4px">
+      <select id="discord-sort" onchange="searchDiscordLog()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:2px 4px;margin-left:4px">
         <option value="time">Newest</option>
         <option value="price-desc">Price High→Low</option>
         <option value="price-asc">Price Low→High</option>
@@ -1918,7 +1918,7 @@ select.form-input option { background: var(--surface2); }
       <button id="discord-expand-btn" class="reddit-expand-btn" onclick="toggleDiscordExpand()" style="display:none"></button>
       <button class="reddit-expand-btn" onclick="clearDiscordFeed()" style="color:var(--red)">Clear</button>
     </div>
-    <div class="reddit-list" id="discord-list"></div>
+    <div class="reddit-list" id="discord-list" style="display:none"></div>
     <div id="discord-channels-section" style="display:none;padding:6px 16px 8px;border-bottom:1px solid var(--border)">
       <div style="font-size:9px;color:var(--muted);margin-bottom:4px">CHANNELS:</div>
       <div id="discord-channels-list" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"></div>
@@ -6187,8 +6187,7 @@ function applyGameFilter() {
     const names = [...selected].filter(s => s !== '_none');
     btn.textContent = (names.length <= 2 ? names.join(', ') : `${names.length} games`) + ' ▼';
   }
-  renderDiscordFeed();
-  if (_discordOptsVisible) searchDiscordLog();
+  searchDiscordLog();
 }
 
 function setAllGameFilters(checked) {
@@ -6717,7 +6716,9 @@ async function ignoreDiscordByIndex(idx) {
 
 function clearDiscordFeed() {
   discordPosts = [];
-  renderDiscordFeed();
+  document.getElementById('discord-log-query').value = '';
+  document.getElementById('discord-log-filter').value = '';
+  searchDiscordLog();
 }
 
 function toggleDiscordExpand() {
