@@ -2357,13 +2357,34 @@ async def _record_shopping_results(results, ps, index, ts, tcg_market, min_disco
     game = tags.get("game") or _detect_game_from_name(ps.name)
 
     # Build product token set for title matching
+    product_name_lower = ps.name.lower()
     product_tokens = _tokenize(_normalize_name(ps.name))
 
+    # Identify product type keywords that MUST appear in results
+    type_keywords = []
+    for kw in ["collector", "play", "draft", "bundle", "display", "case",
+               "set booster", "codex", "gift", "omega", "pack"]:
+        if kw in product_name_lower:
+            type_keywords.append(kw)
+
     for r in results:
-        # Check if this result actually matches the product (not a random related item)
+        # Check if this result actually matches the product
+        result_title_lower = (r.title or "").lower()
         result_tokens = _tokenize(_normalize_name(r.title))
         similarity = _jaccard(product_tokens, result_tokens) if product_tokens and result_tokens else 0
-        is_match = similarity >= 0.30  # Minimum 30% word overlap
+
+        # Require higher similarity AND matching product type keywords
+        is_match = similarity >= 0.40
+        if is_match and type_keywords:
+            # At least one type keyword must appear in the result title
+            has_type = any(kw in result_title_lower for kw in type_keywords)
+            if not has_type:
+                is_match = False
+
+        # Filter extreme price outliers (likely wrong product)
+        if is_match and tcg_market and r.total:
+            if r.total < tcg_market * 0.10 or r.total > tcg_market * 6:
+                is_match = False
 
         discount = None
         if tcg_market and r.total:
