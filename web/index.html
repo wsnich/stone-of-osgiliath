@@ -1915,8 +1915,7 @@ select.form-input option { background: var(--surface2); }
         </div>
       </div>
       <button class="reddit-expand-btn" onclick="toggleDiscordOptions()" id="discord-opts-toggle" style="font-size:10px">Options</button>
-      <button id="discord-expand-btn" class="reddit-expand-btn" onclick="toggleDiscordExpand()" style="display:none"></button>
-      <button class="reddit-expand-btn" onclick="clearDiscordFeed()" style="color:var(--red)">Clear</button>
+      <button id="discord-collapse-btn" class="reddit-expand-btn" onclick="toggleDiscordCollapse()">Hide</button>
     </div>
     <div class="reddit-list" id="discord-list" style="display:none"></div>
     <div id="discord-channels-section" style="display:none;padding:6px 16px 8px;border-bottom:1px solid var(--border)">
@@ -6721,18 +6720,12 @@ function clearDiscordFeed() {
   searchDiscordLog();
 }
 
-function toggleDiscordExpand() {
-  _discordExpanded = !_discordExpanded;
-  renderDiscordFeed();
-}
+let _discordCollapsed = false;
 
-function updateDiscordExpandBtn() {
-  const btn = document.getElementById('discord-expand-btn');
-  if (!btn) return;
-  const extra = discordPosts.length - DISCORD_PREVIEW;
-  if (extra <= 0) { btn.style.display = 'none'; return; }
-  btn.style.display = '';
-  btn.textContent = _discordExpanded ? '▲ Show less' : `▼ ${extra} more`;
+function toggleDiscordCollapse() {
+  _discordCollapsed = !_discordCollapsed;
+  document.getElementById('discord-log-search').style.display = _discordCollapsed ? 'none' : '';
+  document.getElementById('discord-collapse-btn').textContent = _discordCollapsed ? 'Show' : 'Hide';
 }
 
 function notifyDiscordPost(post) {
