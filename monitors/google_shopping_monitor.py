@@ -200,10 +200,11 @@ class GoogleShoppingMonitor:
                         if (seen.has(key)) continue;
                         seen.add(key);
 
-                        // Find the closest link for the URL
-                        let url = '';
-                        const link = el.closest('a[href]') || el.querySelector('a[href]');
-                        if (link) url = link.href;
+                        // Google Shopping doesn't use <a href> for product links (JS navigation)
+                        // Construct a Google search URL for this retailer + product
+                        let url = 'https://www.google.com/search?q=' +
+                            encodeURIComponent(retailer + ' ' + (title || '').substring(0, 60)) +
+                            '&tbm=shop';
 
                         // Shipping info
                         let shipping = '';
