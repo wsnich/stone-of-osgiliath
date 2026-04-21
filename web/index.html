@@ -6084,6 +6084,9 @@ function initDiscordFeed(posts) {
 
   // Load channel names then auto-load audit log
   loadDiscordChannels().then(() => searchDiscordLog());
+
+  // Auto-refresh audit log every 5 seconds
+  setInterval(searchDiscordLog, 5000);
 }
 
 function _parseEmbedFieldsToList(raw) {
