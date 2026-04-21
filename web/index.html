@@ -2118,7 +2118,8 @@ select.form-input option { background: var(--surface2); }
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
       <span style="font-size:12px;color:var(--muted)">Google Shopping — indie retailer deals for your watchlist</span>
-      <button class="btn btn-primary btn-sm" onclick="loadShopping()" style="font-size:10px;padding:3px 10px;margin-left:auto">Refresh</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadShopping()" style="font-size:10px;padding:3px 10px;margin-left:auto">Reload</button>
+      <button class="btn btn-primary btn-sm" onclick="scanGoogleShopping()" id="gs-scan-btn" style="font-size:10px;padding:3px 10px">Scan Now</button>
     </div>
 
     <!-- Summary cards -->
@@ -2629,12 +2630,14 @@ function connectWS() {
 
 connectWS();
 
-// Hide Research tab until we confirm API key exists
+// Hide Research/Shopping tabs until we confirm they're configured
 document.getElementById('tab-research').style.display = 'none';
+document.getElementById('tab-shopping').style.display = 'none';
 (async () => {
   try {
     const s = await (await fetch('/api/settings')).json();
     if (s.research_api_key) document.getElementById('tab-research').style.display = '';
+    if (s.gs_enabled) document.getElementById('tab-shopping').style.display = '';
   } catch(e) {}
 })();
 
@@ -3258,8 +3261,9 @@ async function saveSettingsModal() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   });
-  // Show/hide Research tab based on API key
+  // Show/hide Research/Shopping tabs
   document.getElementById('tab-research').style.display = body.research_api_key ? '' : 'none';
+  document.getElementById('tab-shopping').style.display = body.gs_enabled ? '' : 'none';
   closeSettingsModal();
 }
 
@@ -7290,6 +7294,32 @@ function renderShoppingRetailers(retailers) {
       <span style="color:var(--muted);font-size:10px">${r.last_seen ? new Date(r.last_seen).toLocaleDateString() : ''}</span>
     </div>`).join('')}
   `;
+}
+
+async function scanGoogleShopping() {
+  const btn = document.getElementById('gs-scan-btn');
+  btn.disabled = true;
+  btn.textContent = 'Scanning...';
+
+  // Scan each TCGPlayer product one at a time
+  let scanned = 0;
+  for (const p of products) {
+    if (p.site !== 'tcgplayer' || !p.price || !p.enabled) continue;
+    const idx = products.indexOf(p);
+    btn.textContent = `Scanning ${scanned + 1}...`;
+    try {
+      await fetch(`/api/google-shopping/refresh/${idx}`, { method: 'POST' });
+      scanned++;
+      // Reload results after each scan
+      await loadShopping();
+    } catch(e) {
+      console.warn('Scan error:', e);
+    }
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Scan Now';
+  if (scanned === 0) alert('No eligible products to scan (need TCGPlayer products with prices)');
 }
 
 // ── Research Agent ──────────────────────────────────────────────────
