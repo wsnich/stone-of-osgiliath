@@ -2350,42 +2350,54 @@ async def refresh_google_shopping(index: int):
 
 async def _record_shopping_results(results, ps, index, ts, tcg_market, min_discount=0):
     """Record Google Shopping results to DB and retailer intelligence. Returns indie results."""
+    from web.state import _normalize_name, _tokenize, _jaccard
+
     indie_results = []
     tags = ps.tags or {}
     game = tags.get("game") or _detect_game_from_name(ps.name)
 
+    # Build product token set for title matching
+    product_tokens = _tokenize(_normalize_name(ps.name))
+
     for r in results:
+        # Check if this result actually matches the product (not a random related item)
+        result_tokens = _tokenize(_normalize_name(r.title))
+        similarity = _jaccard(product_tokens, result_tokens) if product_tokens and result_tokens else 0
+        is_match = similarity >= 0.30  # Minimum 30% word overlap
+
         discount = None
         if tcg_market and r.total:
             discount = round(((tcg_market - r.total) / tcg_market) * 100, 1)
 
-        await price_db.record_google_shopping(
-            product_name=ps.name, product_index=index,
-            result_title=r.title, result_price=r.price,
-            shipping_price=r.shipping, total_price=r.total,
-            retailer=r.retailer, retailer_domain=r.domain,
-            product_url=r.url, image_url=r.image_url,
-            is_major=r.is_major, tcg_market=tcg_market,
-            discount_pct=discount, checked_at=ts,
-        )
+        # Only record to DB if it's a reasonable match
+        if is_match:
+            await price_db.record_google_shopping(
+                product_name=ps.name, product_index=index,
+                result_title=r.title, result_price=r.price,
+                shipping_price=r.shipping, total_price=r.total,
+                retailer=r.retailer, retailer_domain=r.domain,
+                product_url=r.url, image_url=r.image_url,
+                is_major=r.is_major, tcg_market=tcg_market,
+                discount_pct=discount, checked_at=ts,
+            )
 
-        # Feed into retailer intelligence (same table as Discord-sourced sightings)
-        retailer_name = _normalize_retailer(r.retailer) if r.retailer else r.domain
-        await price_db.record_retailer_sighting(
-            product_name=ps.name, game=game,
-            retailer=retailer_name,
-            price=r.total or r.price,
-            asin=None, product_url=r.url, checkout_url=None,
-            channel_id="google_shopping", msg_id=f"gs_{index}_{ts}",
-            timestamp=ts,
-        )
+            # Only feed into retailer intelligence for matched products
+            retailer_name = _normalize_retailer(r.retailer) if r.retailer else r.domain
+            await price_db.record_retailer_sighting(
+                product_name=ps.name, game=game,
+                retailer=retailer_name,
+                price=r.total or r.price,
+                asin=None, product_url=r.url, checkout_url=None,
+                channel_id="google_shopping", msg_id=f"gs_{index}_{ts}",
+                timestamp=ts,
+            )
 
-        if not r.is_major and (not min_discount or (discount and discount >= min_discount)):
-            indie_results.append({
-                "title": r.title, "price": r.price, "shipping": r.shipping,
-                "total": r.total, "retailer": r.retailer, "domain": r.domain,
-                "url": r.url, "image_url": r.image_url, "discount_pct": discount,
-            })
+            if not r.is_major and (not min_discount or (discount and discount >= min_discount)):
+                indie_results.append({
+                    "title": r.title, "price": r.price, "shipping": r.shipping,
+                    "total": r.total, "retailer": r.retailer, "domain": r.domain,
+                    "url": r.url, "image_url": r.image_url, "discount_pct": discount,
+                })
 
     return indie_results
 
@@ -2460,20 +2472,8 @@ async def google_shopping_loop():
                         f"{ps.name} — {len(indie_results)} indie deal(s) on Google Shopping",
                         "shopping")
 
-                    # DM alert for deep discounts
-                    dm_user = config.get("discord", {}).get("dm_user_id")
-                    bot_token = config.get("discord", {}).get("bot_token", "")
-                    dm_token = f"Bot {bot_token}" if bot_token else ""
-                    if dm_user and dm_token:
-                        for deal in indie_results:
-                            if deal["discount_pct"] and deal["discount_pct"] >= alert_discount:
-                                dm_msg = (
-                                    f"🛒 **Google Shopping Deal**\n"
-                                    f"**{ps.name}**\n"
-                                    f"{deal['retailer']} — **${deal['total']:.2f}** "
-                                    f"({deal['discount_pct']:+.0f}% vs TCG ${tcg_market:.2f})\n"
-                                    f"🔗 {deal['url']}"
-                                )
+                    # DM alerts disabled until Google Shopping accuracy improves
+                    if False:
                                 await _discord.send_dm(dm_token, dm_user, dm_msg)
 
                 # Rate limit: wait between searches
