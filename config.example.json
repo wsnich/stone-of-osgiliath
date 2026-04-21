@@ -1,7 +1,7 @@
 {
   "_comment": "Copy this file to config.json and fill in your values",
 
-  "check_interval_seconds": 300,
+  "check_interval_seconds": 1800,
 
   "data_dir": null,
 

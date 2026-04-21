@@ -3113,7 +3113,7 @@ function toggleSettingsSection(name) {
 async function openSettingsModal() {
   const res = await fetch('/api/settings');
   const data = await res.json();
-  document.getElementById('set-interval').value = data.check_interval_seconds || 300;
+  document.getElementById('set-interval').value = data.check_interval_seconds || 1800;
   document.getElementById('set-jitter').value = data.jitter_pct ?? 20;
   document.getElementById('set-headless').checked = data.headless !== false;
   document.getElementById('set-user-agent').value = data.user_agent || '';
@@ -3166,7 +3166,7 @@ async function testDiscordDM() {
 
 async function saveSettingsModal() {
   const body = {
-    check_interval_seconds: parseInt(document.getElementById('set-interval').value) || 300,
+    check_interval_seconds: parseInt(document.getElementById('set-interval').value) || 1800,
     jitter_pct: parseInt(document.getElementById('set-jitter').value) || 20,
     headless: document.getElementById('set-headless').checked,
     user_agent: document.getElementById('set-user-agent').value.trim(),

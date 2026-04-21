@@ -557,7 +557,7 @@ async def monitor_loop():
 
     while app_state.monitor_running:
         config      = load_config()
-        global_iv   = config.get("check_interval_seconds", 90)
+        global_iv   = config.get("check_interval_seconds", 1800)
         stealth_cfg = config.get("stealth", {})
         jitter_pct  = stealth_cfg.get("jitter_pct", 20)
         schedule    = config.get("schedule", {})
@@ -1930,7 +1930,7 @@ async def get_settings():
     schedule = config.get("schedule",  {})
     research = config.get("research",  {})
     return {
-        "check_interval_seconds": config.get("check_interval_seconds", 300),
+        "check_interval_seconds": config.get("check_interval_seconds", 1800),
         "jitter_pct":            stealth.get("jitter_pct", 20),
         "headless":              stealth.get("headless", True),
         "user_agent":            stealth.get("user_agent") or "",
