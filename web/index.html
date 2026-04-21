@@ -1928,18 +1928,19 @@ select.form-input option { background: var(--surface2); }
       </div>
     </div>
     <div id="discord-keywords" style="display:none;padding:6px 16px 8px;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--border)"></div>
-    <div id="discord-log-search" style="display:none;padding:8px 16px;border-bottom:1px solid var(--border)">
+    <div id="discord-log-search" style="padding:8px 16px;border-top:1px solid var(--border)">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-        <input type="text" id="discord-log-query" placeholder="Search audit log..." onkeydown="if(event.key==='Enter')searchDiscordLog()" style="flex:1;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:4px 8px">
-        <select id="discord-log-filter" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:4px">
-          <option value="">All</option>
-          <option value="shown">Shown</option>
-          <option value="filtered">Filtered</option>
-        </select>
-        <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" onclick="searchDiscordLog()">Search</button>
+        <div id="discord-log-stats" style="font-size:10px;color:var(--muted)"></div>
+        <div style="margin-left:auto;display:flex;gap:4px;align-items:center">
+          <input type="text" id="discord-log-query" placeholder="Filter..." onkeydown="if(event.key==='Enter')searchDiscordLog()" oninput="clearTimeout(window._dlDebounce);window._dlDebounce=setTimeout(searchDiscordLog,300)" style="width:120px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px">
+          <select id="discord-log-filter" onchange="searchDiscordLog()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px">
+            <option value="">All</option>
+            <option value="shown">Shown</option>
+            <option value="filtered">Filtered</option>
+          </select>
+        </div>
       </div>
-      <div id="discord-log-stats" style="font-size:10px;color:var(--muted);margin-bottom:4px"></div>
-      <div id="discord-log-results" style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:3px"></div>
+      <div id="discord-log-results" style="max-height:400px;overflow-y:auto;display:flex;flex-direction:column;gap:3px"></div>
     </div>
   </div>
 </div>
@@ -6079,37 +6080,10 @@ const DISCORD_PREVIEW = 25;
 function initDiscordFeed(posts) {
   discordPosts = posts || [];
   document.getElementById('discord-section').style.display = '';
+  renderDiscordFeed();
 
-  // Load channel names then backfill from audit log if no live posts
-  loadDiscordChannels().then(() => {
-    if (discordPosts.length) {
-      renderDiscordFeed();
-      return;
-    }
-    fetch('/api/discord/log?action=shown&limit=50')
-      .then(r => r.json())
-      .then(data => {
-        const rows = data.rows || data || [];
-        for (const r of rows.reverse()) {
-          discordPosts.push({
-            id: r.msg_id || r.id || '',
-            author: r.author || '',
-            content: r.content || '',
-            timestamp: r.timestamp || r.logged_at || '',
-            keywords: [],
-            price: r.price,
-            embeds: r.embed_title ? [{
-              title: r.embed_title,
-              description: '',
-              fields: _parseEmbedFieldsToList(r.embed_fields || ''),
-            }] : [],
-            channel_name: _channelNameCache[r.channel_id] || (r.channel_id ? ('##' + r.channel_id.slice(-4)) : ''),
-          });
-        }
-        renderDiscordFeed();
-      })
-      .catch(e => console.warn('Failed to load discord history:', e));
-  });
+  // Load channel names then auto-load audit log
+  loadDiscordChannels().then(() => searchDiscordLog());
 }
 
 function _parseEmbedFieldsToList(raw) {
@@ -6129,8 +6103,8 @@ function prependDiscordPost(post) {
   renderDiscordFeed();
   document.getElementById('discord-section').style.display = '';
   if (post.is_new) notifyDiscordPost(post);
-  // Auto-refresh audit log if Options panel is open
-  if (_discordOptsVisible) searchDiscordLog();
+  // Auto-refresh audit log feed
+  searchDiscordLog();
 }
 
 function _getField(fields, ...names) {
@@ -6415,12 +6389,10 @@ function toggleDiscordOptions() {
   _discordOptsVisible = !_discordOptsVisible;
   document.getElementById('discord-channels-section').style.display = _discordOptsVisible ? '' : 'none';
   document.getElementById('discord-keywords').style.display = _discordOptsVisible ? 'flex' : 'none';
-  document.getElementById('discord-log-search').style.display = _discordOptsVisible ? '' : 'none';
   document.getElementById('discord-opts-toggle').textContent = _discordOptsVisible ? '▲ Options' : 'Options';
   if (_discordOptsVisible) {
     loadDiscordChannels();
     loadDiscordKeywords();
-    searchDiscordLog();
   }
 }
 
