@@ -2424,11 +2424,16 @@ async def google_shopping_loop():
             alert_discount = gs_cfg.get("alert_discount_pct", 15)
             excluded = gs_cfg.get("excluded_domains", [])
 
-            # Build list of products to search (TCGPlayer products with prices)
+            # Build list of products to search (only watchlist items with TCGPlayer prices)
             products_cfg = config.get("products", [])
+            watchlist_indices = set()
+            for entry in product_hub.entries:
+                if entry.tcgplayer_index is not None:
+                    watchlist_indices.add(entry.tcgplayer_index)
+
             searchable = []
             for i, ps in enumerate(app_state.product_statuses):
-                if ps.site == "tcgplayer" and ps.price and ps.enabled:
+                if i in watchlist_indices and ps.site == "tcgplayer" and ps.price and ps.enabled:
                     searchable.append((i, ps, products_cfg[i] if i < len(products_cfg) else {}))
 
             if not searchable:

@@ -7301,16 +7301,23 @@ async function scanGoogleShopping() {
   btn.disabled = true;
   btn.textContent = 'Scanning...';
 
-  // Scan each TCGPlayer product one at a time
+  // Only scan products on the watchlist (Product Hub)
+  const watchlistIndices = new Set();
+  for (const entry of (hubEntries || [])) {
+    if (entry.tcgplayer_index != null) watchlistIndices.add(entry.tcgplayer_index);
+  }
+
   let scanned = 0;
-  for (const p of products) {
-    if (p.site !== 'tcgplayer' || !p.price || !p.enabled) continue;
-    const idx = products.indexOf(p);
-    btn.textContent = `Scanning ${scanned + 1}...`;
+  let total = 0;
+  for (const idx of watchlistIndices) {
+    if (idx >= products.length) continue;
+    const p = products[idx];
+    if (!p || p.site !== 'tcgplayer' || !p.price || !p.enabled) continue;
+    total++;
+    btn.textContent = `Scanning ${total} (${p.name.substring(0, 30)}...)`;
     try {
       await fetch(`/api/google-shopping/refresh/${idx}`, { method: 'POST' });
       scanned++;
-      // Reload results after each scan
       await loadShopping();
     } catch(e) {
       console.warn('Scan error:', e);
@@ -7319,7 +7326,7 @@ async function scanGoogleShopping() {
 
   btn.disabled = false;
   btn.textContent = 'Scan Now';
-  if (scanned === 0) alert('No eligible products to scan (need TCGPlayer products with prices)');
+  if (scanned === 0) alert('No watchlist products with TCGPlayer prices to scan. Add products to the Watchlist first.');
 }
 
 // ── Research Agent ──────────────────────────────────────────────────
