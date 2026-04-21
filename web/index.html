@@ -6969,7 +6969,8 @@ function requestRedditNotify() {
 }
 
 function notifyRedditPost(post) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  // Desktop notifications disabled
+  return;
   const body = post.flair ? `[${post.flair}] ${post.title}` : post.title;
   try {
     const n = new Notification('r/sealedmtgdeals — new post', {
