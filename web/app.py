@@ -316,7 +316,9 @@ async def discord_gateway_loop():
                     bot_token = config.get("discord", {}).get("bot_token", "")
                     dm_token = f"Bot {bot_token}" if bot_token else ""
                     if dm_user and dm_token:
-                        title = entry.get("embeds", [{}])[0].get("title", "") if entry.get("embeds") else entry.get("content", "")[:80]
+                        from web.state import _extract_product_name, _extract_retailer
+                        title = _extract_product_name(entry)
+                        retailer_name = _extract_retailer(entry)
                         price = entry.get("price")
                         price_str = f"${price:.2f}" if price else "no price"
                         score_str = ""
@@ -338,13 +340,16 @@ async def discord_gateway_loop():
                                 pct = ((price - best_match.price) / best_match.price) * 100
                                 score_str = f" ({pct:+.0f}% vs TCG ${best_match.price:.2f})"
 
+                        # Build URL — skip bot URLs (refractbot, valoraio)
                         url = ""
                         for e in entry.get("embeds", []):
-                            if e.get("url"):
-                                url = e["url"]
+                            u = e.get("url", "")
+                            if u and "refractbot" not in u and "valoraio" not in u:
+                                url = u
                                 break
 
-                        dm_msg = f"🔔 **Deal Alert**\n{title}\n**{price_str}**{score_str}"
+                        retailer_str = f"\n🏪 {retailer_name}" if retailer_name else ""
+                        dm_msg = f"🔔 **Deal Alert**\n**{title}**{retailer_str}\n**{price_str}**{score_str}"
                         if url:
                             dm_msg += f"\n🔗 {url}"
                         from web.state import _extract_checkout_links
