@@ -125,160 +125,178 @@ class GoogleShoppingMonitor:
 
                 self._backoff_multiplier = max(self._backoff_multiplier * 0.5, 1.0)
 
-                # Click the first product card to open the retailer comparison
-                clicked = await page.evaluate("""() => {
-                    // Find clickable product cards
-                    let cards = document.querySelectorAll(
-                        '[data-docid], .sh-dgr__grid-result, .sh-pr__product-results a'
-                    );
-                    if (!cards.length) {
-                        // Try broader: any link to a shopping product detail
-                        cards = document.querySelectorAll('a[href*="/shopping/product/"]');
-                    }
-                    if (cards.length > 0) {
-                        cards[0].click();
-                        return true;
-                    }
-                    return false;
-                }""")
+                # Save debug screenshot of search results
+                try:
+                    await page.screenshot(path="google_shopping_search.png")
+                    log.info("Screenshot saved: google_shopping_search.png")
+                except Exception:
+                    pass
 
-                if not clicked:
-                    log.info(f"Google Shopping: no product cards found for '{query[:40]}'")
-                    await browser.close()
-                    return []
-
-                # Wait for the retailer comparison panel/page to load
-                await asyncio.sleep(3)
-
-                # Extract retailer comparison data
+                # First: extract all product cards from the search results page
+                # Each card shows one retailer with price
                 raw = await page.evaluate("""() => {
                     const results = [];
-                    const productTitle = (
-                        document.querySelector('h1, [class*="product-title"], [class*="BvQan"]')
-                        || {}
-                    ).textContent || '';
 
-                    // Method 1: Merchant/offer rows in the comparison panel
-                    // Google shows these as rows with store name, price, shipping, link
-                    const selectors = [
-                        // Comparison table rows
-                        '[class*="sh-osd__offer"], [class*="merchant-offer"]',
-                        // Shopping product offers
-                        'tr[class*="offer"], [data-merchant-id]',
-                        // Generic offer blocks
-                        '[class*="sh-pr__offer"]',
-                        // Fallback: any element with both a price and a store link
-                        '.sh-osd__content > div',
-                    ];
+                    // Google Shopping grid cards — each card is a product+retailer pair
+                    // The grid contains divs with product info
+                    const allLinks = document.querySelectorAll('a[href]');
+                    const processed = new Set();
 
-                    let offers = [];
-                    for (const sel of selectors) {
-                        offers = document.querySelectorAll(sel);
-                        if (offers.length > 1) break;
-                    }
+                    for (const a of allLinks) {
+                        // Find the card container (usually a few levels up)
+                        let card = a;
+                        for (let i = 0; i < 5; i++) {
+                            if (!card.parentElement) break;
+                            card = card.parentElement;
+                            // Stop if we hit a grid-level container
+                            if (card.children.length > 5) break;
+                        }
 
-                    // If no offer rows found, try parsing the full page more broadly
-                    if (offers.length <= 1) {
-                        // Look for structured price+store pairs
-                        const allLinks = document.querySelectorAll('a[href*="url="]');
-                        for (const a of allLinks) {
-                            const container = a.closest('div, tr, li');
-                            if (!container) continue;
-                            const text = container.textContent;
-                            const priceMatch = text.match(/\\$(\\d[\\d,.]*)/);
-                            if (!priceMatch) continue;
-                            // Store name: look for short text that isn't the price
-                            let store = '';
-                            for (const el of container.querySelectorAll('span, div, a')) {
-                                const t = el.textContent.trim();
-                                if (t && !t.includes('$') && t.length > 2 && t.length < 50 &&
-                                    !t.match(/^(free|\\d|rating|review|ship|delivery|compare)/i)) {
-                                    store = t;
-                                    break;
-                                }
-                            }
-                            if (store) {
-                                let shipping = '';
-                                if (text.toLowerCase().includes('free')) shipping = 'free';
-                                else {
-                                    const sm = text.match(/\\+(\\$[\\d.]+)/);
-                                    if (sm) shipping = sm[1];
-                                }
-                                results.push({
-                                    title: productTitle.trim(),
-                                    price: '$' + priceMatch[1],
-                                    retailer: store,
-                                    url: a.href,
-                                    shipping: shipping,
-                                });
+                        if (processed.has(card)) continue;
+
+                        const text = card.textContent || '';
+                        // Must have a price
+                        const priceMatch = text.match(/\\$(\\d[\\d,.]+\\.\\d{2})/);
+                        if (!priceMatch) continue;
+
+                        // Must have an image (product card indicator)
+                        const img = card.querySelector('img[src*="http"]');
+                        if (!img) continue;
+
+                        processed.add(card);
+
+                        // Extract title — usually in a heading or prominent text
+                        let title = '';
+                        const h3 = card.querySelector('h3, [role="heading"]');
+                        if (h3) title = h3.textContent.trim();
+                        if (!title) {
+                            const titleEl = card.querySelector('div[style*="font-weight"] span, div > span');
+                            if (titleEl) title = titleEl.textContent.trim();
+                        }
+
+                        // Extract retailer — typically in a smaller text near the price
+                        // Look for short text that looks like a store name
+                        let retailer = '';
+                        const spans = card.querySelectorAll('span, div');
+                        for (const el of spans) {
+                            const t = el.textContent.trim();
+                            // Retailer heuristic: short text, not a price, not the title,
+                            // not common labels, usually near bottom of card
+                            if (t && t.length >= 3 && t.length <= 40 &&
+                                !t.includes('$') && !t.includes('★') &&
+                                t !== title && !t.startsWith(title) &&
+                                !t.match(/^(free|\\d|rating|sale|new|ad|foil|non-foil|sealed|near mint|sponsored|browse|sort)/i) &&
+                                !t.match(/^(magic|pokemon|yu-gi-oh|the |mtg |secrets|collector|booster)/i) &&
+                                !t.match(/(day|delivery|shipping|arrive|pre-owned|condition)/i) &&
+                                el.children.length === 0) {
+                                // Likely a store name
+                                retailer = t;
                             }
                         }
-                        return { results, method: 'links' };
+
+                        // Shipping
+                        let shipping = '';
+                        const textLower = text.toLowerCase();
+                        if (textLower.includes('free delivery') || textLower.includes('free shipping')) {
+                            shipping = 'free';
+                        } else {
+                            const sm = text.match(/delivery\\s*\\$(\\d[\\d.]*)/i) || text.match(/\\+(\\$[\\d.]+)/);
+                            if (sm) shipping = sm[1];
+                        }
+
+                        const url = a.href;
+
+                        if (retailer && priceMatch) {
+                            results.push({
+                                title: title.substring(0, 200),
+                                price: '$' + priceMatch[1],
+                                retailer: retailer,
+                                url: url,
+                                shipping: shipping,
+                                image: img ? img.src : '',
+                            });
+                        }
                     }
 
-                    // Parse structured offer rows
-                    for (const offer of offers) {
-                        try {
-                            const text = offer.textContent || '';
+                    return { results, count: results.length };
+                }""")
 
-                            // Store/retailer name
-                            let storeEl = offer.querySelector(
-                                '[class*="merchant"], [class*="store"], [class*="seller"], ' +
-                                'a[class*="merchant"], [class*="aULzUe"]'
+                search_results = raw.get("results", []) if raw else []
+                log.info(f"Google Shopping: '{query[:40]}' — {len(search_results)} results from search page")
+
+                # Second: try to click into a product for the full retailer comparison
+                try:
+                    # Click the first product image/card
+                    first_card = await page.query_selector(
+                        'a[href*="/shopping/product/"], '
+                        'a[href*="google.com/url"], '
+                        'div[role="listitem"] a'
+                    )
+                    if not first_card:
+                        # Try clicking the first product image
+                        first_card = await page.query_selector('img[src*="encrypted"]')
+                        if first_card:
+                            first_card = await first_card.evaluate_handle("el => el.closest('a') || el")
+
+                    if first_card:
+                        await first_card.click()
+                        await asyncio.sleep(3)
+
+                        # Save screenshot of detail page
+                        try:
+                            await page.screenshot(path="google_shopping_detail.png")
+                        except Exception:
+                            pass
+
+                        # Extract retailers from detail/comparison panel
+                        detail_raw = await page.evaluate("""() => {
+                            const results = [];
+                            // Look for offer/merchant rows in the comparison panel
+                            const containers = document.querySelectorAll(
+                                '[class*="offer"], [class*="merchant"], ' +
+                                '[class*="seller"], [data-merchant-id]'
                             );
-                            let store = storeEl ? storeEl.textContent.trim() : '';
-                            if (!store) {
-                                // Try the first short text element
-                                for (const el of offer.querySelectorAll('span, a, div')) {
-                                    const t = el.textContent.trim();
-                                    if (t && t.length > 2 && t.length < 50 && !t.includes('$') &&
-                                        !t.match(/^(free|\\d|total|buy|add|compare|rating|star)/i)) {
+                            for (const el of containers) {
+                                const text = el.textContent || '';
+                                const pm = text.match(/\\$(\\d[\\d,.]+\\.\\d{2})/);
+                                if (!pm) continue;
+                                // Find store name
+                                let store = '';
+                                for (const s of el.querySelectorAll('span, a, div')) {
+                                    const t = s.textContent.trim();
+                                    if (t && t.length >= 3 && t.length <= 40 &&
+                                        !t.includes('$') && !t.includes('★') &&
+                                        !t.match(/^(free|\\d|total|buy|add|compare|visit|view)/i) &&
+                                        s.children.length === 0) {
                                         store = t;
                                         break;
                                     }
                                 }
+                                const link = el.querySelector('a[href]');
+                                if (store && pm) {
+                                    let shipping = '';
+                                    if (text.toLowerCase().includes('free')) shipping = 'free';
+                                    results.push({
+                                        title: '',
+                                        price: '$' + pm[1],
+                                        retailer: store,
+                                        url: link ? link.href : '',
+                                        shipping,
+                                    });
+                                }
                             }
+                            return results;
+                        }""")
 
-                            // Price
-                            let priceMatch = text.match(/\\$(\\d[\\d,.]*)/);
-                            let price = priceMatch ? '$' + priceMatch[1] : '';
-
-                            // URL
-                            let link = offer.querySelector('a[href]');
-                            let url = link ? link.href : '';
-
-                            // Shipping
-                            let shipping = '';
-                            let textLower = text.toLowerCase();
-                            if (textLower.includes('free shipping') || textLower.includes('free delivery')) {
-                                shipping = 'free';
-                            } else {
-                                let sm = text.match(/\\+(\\$[\\d.]+)\\s*(?:ship|deliver)/i);
-                                if (!sm) sm = text.match(/shipping\\s*\\$(\\d[\\d.]*)/i);
-                                if (sm) shipping = '$' + (sm[1].startsWith('$') ? sm[1].slice(1) : sm[1]);
-                            }
-
-                            // Image
-                            let img = offer.querySelector('img[src]');
-                            let image = img ? img.src : '';
-
-                            if (store && price) {
-                                results.push({
-                                    title: productTitle.trim(),
-                                    price, retailer: store, url, shipping, image,
-                                });
-                            }
-                        } catch(e) {}
-                    }
-
-                    return { results, method: 'offers' };
-                }""")
+                        if detail_raw and len(detail_raw) > len(search_results):
+                            log.info(f"Google Shopping: detail panel had {len(detail_raw)} retailers")
+                            search_results = detail_raw
+                except Exception as e:
+                    log.debug(f"Google Shopping: detail click failed: {e}")
 
                 await browser.close()
 
-                raw_results = raw.get("results", []) if raw else []
-                method = raw.get("method", "?")
-                log.info(f"Google Shopping: '{query[:40]}' — {len(raw_results)} retailers (method: {method})")
+                raw_results = search_results
 
                 # Parse results
                 seen_domains = set()
