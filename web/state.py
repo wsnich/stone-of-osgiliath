@@ -64,6 +64,9 @@ class ProductStatus:
     ebay_sales: Optional[list] = None  # [{title, price, grade, condition, ignored}]
     ebay_live: Optional[list] = None   # [{title, price, grade, ignored}]
     ebay_ignored_titles: list = field(default_factory=list)
+    # Google Shopping
+    google_shopping: Optional[list] = None  # [{title, price, shipping, total, retailer, domain, url, discount_pct}]
+    google_shopping_checked: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)

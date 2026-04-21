@@ -36,11 +36,14 @@ from monitors.marketplace_monitor import (
 from monitors.discord_gateway import DiscordGatewayMonitor
 import db as price_db
 
+from monitors.google_shopping_monitor import GoogleShoppingMonitor
+
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _tcgplayer = TCGPlayerMonitor()
 _ebay      = EbayMonitor()
 _discord   = DiscordMonitor()
 _discord_gw = DiscordGatewayMonitor()
+_google_shopping = GoogleShoppingMonitor()
 
 # Reddit poller state
 _seen_reddit_ids: set[str] = set()
@@ -922,6 +925,7 @@ async def lifespan(app: FastAPI):
 
     discord_task = asyncio.create_task(discord_gateway_loop())
     marketplace_task = asyncio.create_task(marketplace_gateway_loop())
+    shopping_task = asyncio.create_task(google_shopping_loop())
 
     app_state._monitor_task = task
     app_state._reddit_task  = reddit_task
@@ -930,7 +934,7 @@ async def lifespan(app: FastAPI):
     deal_tracker.save_to_disk()
     product_hub.save_to_disk()
     app_state.monitor_running = False
-    for t in (task, reddit_task, discord_task, marketplace_task, research_task):
+    for t in (task, reddit_task, discord_task, marketplace_task, research_task, shopping_task):
         t.cancel()
         try:
             await t
@@ -1951,6 +1955,10 @@ async def get_settings():
         "dm_user_id":           config.get("discord", {}).get("dm_user_id") or "",
         "discord_email":        config.get("discord", {}).get("email") or "",
         "discord_password":     config.get("discord", {}).get("password") or "",
+        "gs_enabled":            config.get("google_shopping", {}).get("enabled", False),
+        "gs_search_delay":       config.get("google_shopping", {}).get("search_delay_seconds", 300),
+        "gs_cycle_hours":        config.get("google_shopping", {}).get("cycle_interval_hours", 6),
+        "gs_alert_discount":     config.get("google_shopping", {}).get("alert_discount_pct", 15),
         "research_enabled":      research.get("enabled", False),
         "research_api_key":      research.get("api_key") or "",
         "research_interval_hours": research.get("interval_hours", 168),
@@ -2014,6 +2022,16 @@ async def update_settings(body: dict):
         config.setdefault("discord", {})["email"] = body["discord_email"].strip() or None
     if "discord_password" in body:
         config.setdefault("discord", {})["password"] = body["discord_password"].strip() or None
+    # Google Shopping settings
+    gc = config.setdefault("google_shopping", {})
+    if "gs_enabled" in body:
+        gc["enabled"] = bool(body["gs_enabled"])
+    if "gs_search_delay" in body:
+        gc["search_delay_seconds"] = max(180, int(body["gs_search_delay"]))
+    if "gs_cycle_hours" in body:
+        gc["cycle_interval_hours"] = max(1, min(48, int(body["gs_cycle_hours"])))
+    if "gs_alert_discount" in body:
+        gc["alert_discount_pct"] = max(5, min(50, int(body["gs_alert_discount"])))
     # Research agent settings
     rc = config.setdefault("research", {})
     if "research_enabled" in body:
@@ -2294,6 +2312,162 @@ async def delete_portfolio_item(item_id: int):
         item["id"] = i
     _save_portfolio(portfolio)
     return {"status": "ok"}
+
+# ------------------------------------------------------------------
+# Google Shopping
+# ------------------------------------------------------------------
+
+@app.get("/api/google-shopping")
+async def get_shopping_results(product_index: int = -1, major: bool = False, limit: int = 100):
+    idx = product_index if product_index >= 0 else None
+    return await price_db.get_google_shopping(product_index=idx, major=major, limit=limit)
+
+@app.get("/api/google-shopping/retailers")
+async def get_shopping_retailers():
+    return await price_db.get_google_shopping_retailers()
+
+@app.post("/api/google-shopping/refresh/{index}")
+async def refresh_google_shopping(index: int):
+    if index < 0 or index >= len(app_state.product_statuses):
+        raise HTTPException(status_code=404, detail="Product not found")
+    ps = app_state.product_statuses[index]
+    config = load_config()
+    gs_cfg = config.get("google_shopping", {})
+    stealth_cfg = config.get("stealth", {})
+    product_cfg = config.get("products", [])[index] if index < len(config.get("products", [])) else {}
+
+    query = _google_shopping.build_query(product_cfg)
+    results = await _google_shopping.search(query, stealth_cfg, gs_cfg.get("excluded_domains", []))
+
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tcg_market = ps.price
+    indie_results = []
+
+    for r in results:
+        discount = None
+        if tcg_market and r.total:
+            discount = round(((tcg_market - r.total) / tcg_market) * 100, 1)
+        await price_db.record_google_shopping(
+            product_name=ps.name, product_index=index,
+            result_title=r.title, result_price=r.price,
+            shipping_price=r.shipping, total_price=r.total,
+            retailer=r.retailer, retailer_domain=r.domain,
+            product_url=r.url, image_url=r.image_url,
+            is_major=r.is_major, tcg_market=tcg_market,
+            discount_pct=discount, checked_at=ts,
+        )
+        if not r.is_major:
+            indie_results.append({
+                "title": r.title, "price": r.price, "shipping": r.shipping,
+                "total": r.total, "retailer": r.retailer, "domain": r.domain,
+                "url": r.url, "image_url": r.image_url, "discount_pct": discount,
+            })
+
+    await app_state.update_product(index, google_shopping=indie_results, google_shopping_checked=ts)
+    return {"status": "ok", "results": len(indie_results)}
+
+
+async def google_shopping_loop():
+    """Background loop — searches Google Shopping for watchlist products."""
+    await asyncio.sleep(30)  # Let app start
+
+    while True:
+        try:
+            config = load_config()
+            gs_cfg = config.get("google_shopping", {})
+            if not gs_cfg.get("enabled", False):
+                await asyncio.sleep(300)
+                continue
+
+            stealth_cfg = config.get("stealth", {})
+            search_delay = max(180, gs_cfg.get("search_delay_seconds", 300))
+            min_discount = gs_cfg.get("min_discount_pct", 10)
+            alert_discount = gs_cfg.get("alert_discount_pct", 15)
+            excluded = gs_cfg.get("excluded_domains", [])
+
+            # Build list of products to search (TCGPlayer products with prices)
+            products_cfg = config.get("products", [])
+            searchable = []
+            for i, ps in enumerate(app_state.product_statuses):
+                if ps.site == "tcgplayer" and ps.price and ps.enabled:
+                    searchable.append((i, ps, products_cfg[i] if i < len(products_cfg) else {}))
+
+            if not searchable:
+                await asyncio.sleep(3600)
+                continue
+
+            # Sort by staleness (least recently checked first)
+            searchable.sort(key=lambda x: x[1].google_shopping_checked or "")
+
+            await app_state.log("info", f"Google Shopping: scanning {len(searchable)} products", "shopping")
+
+            for i, ps, pcfg in searchable:
+                query = _google_shopping.build_query(pcfg)
+                results = await _google_shopping.search(query, stealth_cfg, excluded)
+
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                tcg_market = ps.price
+                indie_results = []
+
+                for r in results:
+                    discount = None
+                    if tcg_market and r.total:
+                        discount = round(((tcg_market - r.total) / tcg_market) * 100, 1)
+                    await price_db.record_google_shopping(
+                        product_name=ps.name, product_index=i,
+                        result_title=r.title, result_price=r.price,
+                        shipping_price=r.shipping, total_price=r.total,
+                        retailer=r.retailer, retailer_domain=r.domain,
+                        product_url=r.url, image_url=r.image_url,
+                        is_major=r.is_major, tcg_market=tcg_market,
+                        discount_pct=discount, checked_at=ts,
+                    )
+                    if not r.is_major and discount and discount >= min_discount:
+                        indie_results.append({
+                            "title": r.title, "price": r.price, "shipping": r.shipping,
+                            "total": r.total, "retailer": r.retailer, "domain": r.domain,
+                            "url": r.url, "image_url": r.image_url, "discount_pct": discount,
+                        })
+
+                await app_state.update_product(i, google_shopping=indie_results, google_shopping_checked=ts)
+
+                if indie_results:
+                    await app_state.log("info",
+                        f"{ps.name} — {len(indie_results)} indie deal(s) on Google Shopping",
+                        "shopping")
+
+                    # DM alert for deep discounts
+                    dm_user = config.get("discord", {}).get("dm_user_id")
+                    bot_token = config.get("discord", {}).get("bot_token", "")
+                    dm_token = f"Bot {bot_token}" if bot_token else ""
+                    if dm_user and dm_token:
+                        for deal in indie_results:
+                            if deal["discount_pct"] and deal["discount_pct"] >= alert_discount:
+                                dm_msg = (
+                                    f"🛒 **Google Shopping Deal**\n"
+                                    f"**{ps.name}**\n"
+                                    f"{deal['retailer']} — **${deal['total']:.2f}** "
+                                    f"({deal['discount_pct']:+.0f}% vs TCG ${tcg_market:.2f})\n"
+                                    f"🔗 {deal['url']}"
+                                )
+                                await _discord.send_dm(dm_token, dm_user, dm_msg)
+
+                # Rate limit: wait between searches
+                jitter = random.randint(0, int(search_delay * 0.2))
+                await asyncio.sleep(search_delay + jitter)
+
+            # Cycle complete — wait before next cycle
+            cycle_hours = gs_cfg.get("cycle_interval_hours", 6)
+            await app_state.log("info",
+                f"Google Shopping: cycle complete, next in {cycle_hours}h", "shopping")
+            await asyncio.sleep(cycle_hours * 3600)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.warning(f"Google Shopping loop error: {e}")
+            await asyncio.sleep(3600)
+
 
 # ------------------------------------------------------------------
 # Research Agent

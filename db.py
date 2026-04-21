@@ -163,6 +163,29 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_rf_status ON research_findings(status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_rf_created ON research_findings(created_at)")
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS google_shopping_results (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_name    TEXT    NOT NULL,
+                product_index   INTEGER NOT NULL,
+                result_title    TEXT    NOT NULL,
+                result_price    REAL,
+                shipping_price  REAL,
+                total_price     REAL,
+                retailer        TEXT    NOT NULL,
+                retailer_domain TEXT,
+                product_url     TEXT,
+                image_url       TEXT,
+                is_major        INTEGER NOT NULL DEFAULT 0,
+                tcg_market      REAL,
+                discount_pct    REAL,
+                checked_at      TEXT    NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_gs_product ON google_shopping_results(product_index)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_gs_time ON google_shopping_results(checked_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_gs_retailer ON google_shopping_results(retailer_domain)")
+
         await db.commit()
 
 # ---------------------------------------------------------------------------
@@ -728,3 +751,70 @@ async def get_research_runs(limit: int = 20) -> list[dict]:
         except Exception:
             pass
     return runs
+
+# ---------------------------------------------------------------------------
+# Google Shopping
+# ---------------------------------------------------------------------------
+
+async def record_google_shopping(
+    product_name: str, product_index: int,
+    result_title: str, result_price: Optional[float],
+    shipping_price: Optional[float], total_price: Optional[float],
+    retailer: str, retailer_domain: str,
+    product_url: str, image_url: Optional[str],
+    is_major: bool, tcg_market: Optional[float],
+    discount_pct: Optional[float], checked_at: str,
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO google_shopping_results
+               (product_name, product_index, result_title, result_price,
+                shipping_price, total_price, retailer, retailer_domain,
+                product_url, image_url, is_major, tcg_market, discount_pct, checked_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (product_name, product_index, result_title, result_price,
+             shipping_price, total_price, retailer, retailer_domain,
+             product_url, image_url, 1 if is_major else 0,
+             tcg_market, discount_pct, checked_at),
+        )
+        await db.commit()
+
+
+async def get_google_shopping(
+    product_index: Optional[int] = None, major: bool = False, limit: int = 100,
+) -> list[dict]:
+    """Get latest Google Shopping results. Excludes major retailers by default."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        conditions, params = [], []
+        if product_index is not None:
+            conditions.append("product_index = ?")
+            params.append(product_index)
+        if not major:
+            conditions.append("is_major = 0")
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        params.append(limit)
+        async with db.execute(
+            f"SELECT * FROM google_shopping_results {where} ORDER BY checked_at DESC LIMIT ?",
+            params,
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_google_shopping_retailers() -> list[dict]:
+    """Aggregate indie retailers with counts and avg discounts."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT retailer, retailer_domain,
+                   COUNT(*) as sightings,
+                   COUNT(DISTINCT product_name) as products,
+                   AVG(discount_pct) as avg_discount,
+                   MIN(total_price) as min_price,
+                   MAX(checked_at) as last_seen
+            FROM google_shopping_results
+            WHERE is_major = 0 AND discount_pct IS NOT NULL
+            GROUP BY retailer_domain
+            ORDER BY avg_discount DESC
+        """) as cur:
+            return [dict(r) for r in await cur.fetchall()]

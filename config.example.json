@@ -46,6 +46,15 @@
     "ignored_patterns": []
   },
 
+  "google_shopping": {
+    "enabled": false,
+    "search_delay_seconds": 300,
+    "cycle_interval_hours": 6,
+    "min_discount_pct": 10,
+    "alert_discount_pct": 15,
+    "excluded_domains": []
+  },
+
   "research": {
     "enabled": false,
     "api_key": "YOUR_ANTHROPIC_API_KEY_HERE",

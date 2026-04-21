@@ -1814,6 +1814,32 @@ select.form-input option { background: var(--surface2); }
       </div>
 
       <!-- Research -->
+      <!-- Google Shopping -->
+      <div class="settings-section" data-section="shopping" style="margin-bottom:2px">
+        <div onclick="toggleSettingsSection('shopping')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+          Google Shopping <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
+        </div>
+        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" id="set-gs-enabled"> Enable Google Shopping scans
+          </label>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Search Delay (s) <span style="color:var(--muted);font-weight:400">min 180</span></label>
+              <input type="number" class="form-input" id="set-gs-delay" min="180" max="3600" value="300">
+            </div>
+            <div>
+              <label class="form-label">Cycle Interval (hours)</label>
+              <input type="number" class="form-input" id="set-gs-cycle" min="1" max="48" value="6">
+            </div>
+            <div>
+              <label class="form-label">Alert Discount %</label>
+              <input type="number" class="form-input" id="set-gs-alert" min="5" max="50" value="15">
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="settings-section" data-section="research" style="margin-bottom:2px">
         <div onclick="toggleSettingsSection('research')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
           Research Agent <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
@@ -1957,6 +1983,7 @@ select.form-input option { background: var(--surface2); }
         <button class="tab-btn" id="tab-graded" onclick="switchTab('graded')">Graded</button>
         <button class="tab-btn" id="tab-portfolio" onclick="switchTab('portfolio')">Portfolio</button>
         <button class="tab-btn" id="tab-intelligence" onclick="switchTab('intelligence')">Intelligence</button>
+        <button class="tab-btn" id="tab-shopping" onclick="switchTab('shopping')">Shopping</button>
         <button class="tab-btn" id="tab-research" onclick="switchTab('research')">Research</button>
       </div>
       <button class="btn btn-primary btn-sm" id="add-btn" onclick="handleAddBtn()" style="display:none">+ Add Product</button>
@@ -2085,6 +2112,30 @@ select.form-input option { background: var(--surface2); }
     <div id="overview-products"></div>
 
     </div><!-- /panel-intelligence -->
+
+    <!-- ── Shopping tab ───────────────────────────────────── -->
+    <div class="tab-panel" id="panel-shopping">
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="font-size:12px;color:var(--muted)">Google Shopping — indie retailer deals for your watchlist</span>
+      <button class="btn btn-primary btn-sm" onclick="loadShopping()" style="font-size:10px;padding:3px 10px;margin-left:auto">Refresh</button>
+    </div>
+
+    <!-- Summary cards -->
+    <div id="shopping-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px"></div>
+
+    <!-- Results by product -->
+    <div id="shopping-results">
+      <div class="empty-state">
+        <strong>No Google Shopping results yet</strong>
+        <p>Enable Google Shopping in Settings to scan for indie retailer deals on your watchlist products.</p>
+      </div>
+    </div>
+
+    <!-- Retailer directory -->
+    <div id="shopping-retailers" style="margin-top:16px"></div>
+
+    </div><!-- /panel-shopping -->
 
     <!-- ── Research tab ───────────────────────────────────── -->
     <div class="tab-panel" id="panel-research">
@@ -2590,7 +2641,7 @@ document.getElementById('tab-research').style.display = 'none';
 // Restore tab from URL hash after reload
 if (window.location.hash) {
   const tab = window.location.hash.slice(1);
-  if (['deals','products','tcgplayer','graded','portfolio','intelligence','research'].includes(tab)) switchTab(tab);
+  if (['deals','products','tcgplayer','graded','portfolio','intelligence','shopping','research'].includes(tab)) switchTab(tab);
   history.replaceState(null, '', window.location.pathname);
 }
 
@@ -3135,6 +3186,10 @@ async function openSettingsModal() {
   document.getElementById('set-dm-user-id').value = data.dm_user_id || '';
   document.getElementById('set-discord-email').value = data.discord_email || '';
   document.getElementById('set-discord-password').value = data.discord_password || '';
+  document.getElementById('set-gs-enabled').checked = data.gs_enabled || false;
+  document.getElementById('set-gs-delay').value = data.gs_search_delay || 300;
+  document.getElementById('set-gs-cycle').value = data.gs_cycle_hours || 6;
+  document.getElementById('set-gs-alert').value = data.gs_alert_discount || 15;
   document.getElementById('set-research-enabled').checked = data.research_enabled || false;
   document.getElementById('set-research-api-key').value = data.research_api_key || '';
   document.getElementById('set-research-interval').value = data.research_interval_hours || 168;
@@ -3188,6 +3243,10 @@ async function saveSettingsModal() {
     dm_user_id: document.getElementById('set-dm-user-id').value.trim(),
     discord_email: document.getElementById('set-discord-email').value.trim(),
     discord_password: document.getElementById('set-discord-password').value.trim(),
+    gs_enabled: document.getElementById('set-gs-enabled').checked,
+    gs_search_delay: parseInt(document.getElementById('set-gs-delay').value) || 300,
+    gs_cycle_hours: parseInt(document.getElementById('set-gs-cycle').value) || 6,
+    gs_alert_discount: parseInt(document.getElementById('set-gs-alert').value) || 15,
     research_enabled: document.getElementById('set-research-enabled').checked,
     research_api_key: document.getElementById('set-research-api-key').value.trim(),
     research_interval_hours: parseInt(document.getElementById('set-research-interval').value) || 168,
@@ -3731,7 +3790,7 @@ let _activeTab = 'products';
 
 function switchTab(tab) {
   _activeTab = tab;
-  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence', 'research']) {
+  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence', 'shopping', 'research']) {
     document.getElementById(`tab-${t}`).classList.toggle('active', tab === t);
     document.getElementById(`panel-${t}`).classList.toggle('active', tab === t);
   }
@@ -3750,6 +3809,7 @@ function switchTab(tab) {
   if (tab === 'intelligence') loadOverview();
   if (tab === 'graded')       renderComicsGrid();
   if (tab === 'portfolio')    loadPortfolio();
+  if (tab === 'shopping')      loadShopping();
   if (tab === 'research')     loadResearch();
 }
 
@@ -7121,6 +7181,115 @@ async function submitSetupWizard() {
 
   document.getElementById('setup-wizard').style.display = 'none';
   alert('Setup complete! Restart the app for Discord Gateway monitoring to begin.');
+}
+
+// ── Google Shopping ─────────────────────────────────────────────────
+
+async function loadShopping() {
+  try {
+    const [results, retailers] = await Promise.all([
+      fetch('/api/google-shopping?limit=200').then(r => r.json()),
+      fetch('/api/google-shopping/retailers').then(r => r.json()),
+    ]);
+    renderShoppingSummary(results, retailers);
+    renderShoppingResults(results);
+    renderShoppingRetailers(retailers);
+  } catch(e) {
+    console.warn('Failed to load shopping data:', e);
+  }
+}
+
+function renderShoppingSummary(results, retailers) {
+  const el = document.getElementById('shopping-summary');
+  const uniqueRetailers = new Set(results.map(r => r.retailer_domain)).size;
+  const bestDeal = results.length ? results.reduce((a, b) => (b.discount_pct || 0) > (a.discount_pct || 0) ? b : a) : null;
+  const uniqueProducts = new Set(results.map(r => r.product_name)).size;
+
+  el.innerHTML = `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:120px">
+      <div style="font-size:10px;color:var(--muted)">Indie Retailers</div>
+      <div style="font-size:14px;font-weight:600">${uniqueRetailers}</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:120px">
+      <div style="font-size:10px;color:var(--muted)">Products Found</div>
+      <div style="font-size:14px;font-weight:600">${uniqueProducts}</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:120px">
+      <div style="font-size:10px;color:var(--muted)">Total Results</div>
+      <div style="font-size:14px;font-weight:600">${results.length}</div>
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:120px">
+      <div style="font-size:10px;color:var(--muted)">Best Deal</div>
+      <div style="font-size:14px;font-weight:600">${bestDeal && bestDeal.discount_pct ? bestDeal.discount_pct.toFixed(0) + '% below' : 'N/A'}</div>
+      <div style="font-size:9px;color:var(--muted)">${bestDeal ? bestDeal.retailer : ''}</div>
+    </div>
+  `;
+}
+
+function renderShoppingResults(results) {
+  const el = document.getElementById('shopping-results');
+  if (!results.length) {
+    el.innerHTML = `<div class="empty-state">
+      <strong>No indie retailer results yet</strong>
+      <p>Enable Google Shopping in Settings, or click Refresh to scan manually.</p>
+    </div>`;
+    return;
+  }
+
+  // Group by product
+  const byProduct = {};
+  for (const r of results) {
+    const key = r.product_name;
+    if (!byProduct[key]) byProduct[key] = { name: key, tcg_market: r.tcg_market, results: [] };
+    byProduct[key].results.push(r);
+  }
+
+  el.innerHTML = Object.values(byProduct).map(group => {
+    const market = group.tcg_market;
+    const sorted = group.results.sort((a, b) => (a.total_price || 999) - (b.total_price || 999));
+
+    return `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:13px;font-weight:600;flex:1">${_esc(group.name)}</span>
+        ${market ? `<span style="font-size:10px;color:var(--muted)">TCG Market: $${market.toFixed(2)}</span>` : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 70px 70px 70px 80px;gap:4px;font-size:9px;color:var(--muted);font-weight:600;text-transform:uppercase;padding:0 4px 4px;border-bottom:1px solid var(--border)">
+        <span>Retailer</span><span>Price</span><span>Shipping</span><span>Total</span><span>vs Market</span>
+      </div>
+      ${sorted.map(r => {
+        const disc = r.discount_pct;
+        const discColor = disc > 15 ? 'var(--green)' : disc > 5 ? 'var(--accent)' : 'var(--muted)';
+        return `<div style="display:grid;grid-template-columns:1fr 70px 70px 70px 80px;gap:4px;padding:4px;font-size:11px;border-bottom:1px solid var(--border);align-items:center">
+          <a href="${_esc(r.product_url)}" target="_blank" style="color:var(--blue);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_esc(r.retailer_domain)}">${_esc(r.retailer)}</a>
+          <span>$${r.result_price ? r.result_price.toFixed(2) : '?'}</span>
+          <span style="color:var(--muted)">${r.shipping_price === 0 ? 'Free' : r.shipping_price ? '$' + r.shipping_price.toFixed(2) : '?'}</span>
+          <span style="font-weight:600">$${r.total_price ? r.total_price.toFixed(2) : '?'}</span>
+          <span style="color:${discColor};font-weight:600">${disc ? disc.toFixed(0) + '% below' : ''}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+}
+
+function renderShoppingRetailers(retailers) {
+  const el = document.getElementById('shopping-retailers');
+  if (!retailers.length) { el.innerHTML = ''; return; }
+
+  el.innerHTML = `
+    <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px">RETAILER DIRECTORY</div>
+    <div style="display:grid;grid-template-columns:1fr 60px 60px 80px 80px;gap:4px;font-size:9px;color:var(--muted);font-weight:600;text-transform:uppercase;padding:4px;border-bottom:1px solid var(--border)">
+      <span>Retailer</span><span>Finds</span><span>Products</span><span>Avg Discount</span><span>Last Seen</span>
+    </div>
+    ${retailers.map(r => `
+    <div style="display:grid;grid-template-columns:1fr 60px 60px 80px 80px;gap:4px;padding:4px;font-size:11px;border-bottom:1px solid var(--border)">
+      <span style="color:var(--text)">${_esc(r.retailer)} <span style="color:var(--muted);font-size:9px">${_esc(r.retailer_domain)}</span></span>
+      <span>${r.sightings}</span>
+      <span>${r.products}</span>
+      <span style="color:var(--green);font-weight:600">${r.avg_discount ? r.avg_discount.toFixed(0) + '%' : 'N/A'}</span>
+      <span style="color:var(--muted);font-size:10px">${r.last_seen ? new Date(r.last_seen).toLocaleDateString() : ''}</span>
+    </div>`).join('')}
+  `;
 }
 
 // ── Research Agent ──────────────────────────────────────────────────
