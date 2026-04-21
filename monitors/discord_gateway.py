@@ -495,38 +495,59 @@ class DiscordGatewayMonitor:
                         let timeEl = el.querySelector('time');
                         let timestamp = timeEl ? (timeEl.getAttribute('datetime') || '') : '';
 
-                        // Extract embeds
+                        // Extract embeds — use broad selectors to catch various embed styles
                         let embeds = [];
-                        let embedEls = el.querySelectorAll('[class*="embedWrapper_"], [class*="embed_"]');
+                        let embedEls = el.querySelectorAll('[class*="embed" i]:not([class*="embedSuppressButton"])');
+                        // Dedupe: only process top-level embed wrappers
+                        let seen = new Set();
                         for (let embedEl of embedEls) {
+                            // Walk up to find the outermost embed container
+                            let root = embedEl;
+                            while (root.parentElement && root.parentElement.matches('[class*="embed" i]') &&
+                                   root.parentElement.closest('[id^="chat-messages-"]') === el) {
+                                root = root.parentElement;
+                            }
+                            if (seen.has(root)) continue;
+                            seen.add(root);
+
                             let title = '';
                             let description = '';
                             let url = '';
-                            let fields = {};
                             let image = '';
 
-                            let tEl = embedEl.querySelector('[class*="embedTitle_"], [class*="embedAuthorName"]');
+                            // Title: try multiple selectors
+                            let tEl = root.querySelector('[class*="embedTitle"], [class*="embedAuthor" i] span');
                             if (tEl) title = tEl.textContent.trim();
 
-                            let dEl = embedEl.querySelector('[class*="embedDescription_"]');
+                            // Author name (separate from title in some embeds)
+                            if (!title) {
+                                let authEl = root.querySelector('[class*="embedAuthor" i]');
+                                if (authEl) title = authEl.textContent.trim();
+                            }
+
+                            // Description
+                            let dEl = root.querySelector('[class*="embedDescription" i]');
                             if (dEl) description = dEl.textContent.trim();
 
-                            let titleLink = (tEl && tEl.closest('a')) || embedEl.querySelector('[class*="embedTitle"] a[href]');
+                            // URL from title link or any link
+                            let titleLink = (tEl && tEl.closest('a')) || root.querySelector('[class*="embedTitle"] a[href]');
                             if (titleLink) url = titleLink.href;
                             if (!url) {
-                                let aEl = embedEl.querySelector('a[href]');
+                                let aEl = root.querySelector('a[href]');
                                 if (aEl) url = aEl.href;
                             }
 
-                            let imgEl = embedEl.querySelector('img[src]');
+                            // Image/thumbnail
+                            let imgEl = root.querySelector('[class*="embedThumbnail" i] img, [class*="embedImage" i] img, img[class*="embedMedia" i]');
+                            if (!imgEl) imgEl = root.querySelector('img[src]');
                             if (imgEl) image = imgEl.src;
 
+                            // Fields
                             let fieldsList = [];
-                            embedEl.querySelectorAll('[class*="embedField_"]').forEach(fEl => {
-                                let nEl = fEl.querySelector('[class*="embedFieldName"]');
-                                let vEl = fEl.querySelector('[class*="embedFieldValue"]');
+                            root.querySelectorAll('[class*="embedField" i]').forEach(fEl => {
+                                let nEl = fEl.querySelector('[class*="embedFieldName" i]');
+                                let vEl = fEl.querySelector('[class*="embedFieldValue" i]');
                                 if (nEl && vEl) {
-                                    // Preserve markdown-style links from <a> tags
                                     let val = '';
                                     let links = vEl.querySelectorAll('a[href]');
                                     if (links.length > 0) {
@@ -542,10 +563,32 @@ class DiscordGatewayMonitor:
                                 }
                             });
 
-                            if (title || description) {
+                            // Fallback: if no fields found via class selectors, try grid/table patterns
+                            if (!fieldsList.length) {
+                                // Some embeds use a grid layout without embedField classes
+                                let gridEls = root.querySelectorAll('[class*="grid" i] > div, [class*="fields" i] > div');
+                                let pairs = [];
+                                gridEls.forEach(g => {
+                                    let t = g.textContent.trim();
+                                    if (t) pairs.push(t);
+                                });
+                                // Try to pair them as name/value
+                                for (let i = 0; i < pairs.length - 1; i += 2) {
+                                    if (pairs[i].length < 30 && pairs[i+1]) {
+                                        fieldsList.push({ name: pairs[i], value: pairs[i+1] });
+                                    }
+                                }
+                            }
+
+                            // Footer text (useful for metadata)
+                            let footerEl = root.querySelector('[class*="embedFooter" i]');
+                            let footer = footerEl ? footerEl.textContent.trim() : '';
+
+                            if (title || description || fieldsList.length) {
                                 let e = { title, description, url };
                                 if (image) e.thumbnail = { url: image };
                                 if (fieldsList.length) e.fields = fieldsList;
+                                if (footer) e.footer = { text: footer };
                                 embeds.push(e);
                             }
                         }
