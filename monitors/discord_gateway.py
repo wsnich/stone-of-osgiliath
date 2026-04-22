@@ -441,13 +441,37 @@ class DiscordGatewayMonitor:
             # Auto-click "Jump to present" if no messages for 5+ minutes on this tab
             last_key = f"_last_msg_{channel_id}"
             last_msg_time = getattr(self, last_key, 0)
-            if last_msg_time and time.time() - last_msg_time > 300:
+            if last_msg_time and time.time() - last_msg_time > 120:
                 try:
-                    jump_btn = await page.query_selector('[class*="jumpToPresentBar" i], [class*="newMessagesBar" i]')
-                    if jump_btn:
-                        await jump_btn.click()
-                        await asyncio.sleep(1)
-                        setattr(self, last_key, time.time())  # Reset timer after clicking
+                    # Use JS to find and click any "jump to present" type bar
+                    clicked = await page.evaluate("""() => {
+                        // Try multiple selectors for Discord's "jump to present" bar
+                        const selectors = [
+                            '[class*="jumpToPresentBar"]',
+                            '[class*="newMessagesBar"]',
+                            '[class*="jumpToPresent"]',
+                            '[class*="newMessages"]',
+                        ];
+                        for (const sel of selectors) {
+                            const el = document.querySelector(sel);
+                            if (el) { el.click(); return 'class:' + sel; }
+                        }
+                        // Fallback: find any button/div with "Jump to present" text
+                        const all = document.querySelectorAll('button, div[role="button"], span');
+                        for (const el of all) {
+                            const t = el.textContent.trim().toLowerCase();
+                            if (t.includes('jump to present') || t === 'new messages' ||
+                                t.includes('new since')) {
+                                el.click();
+                                return 'text:' + t.substring(0, 30);
+                            }
+                        }
+                        return null;
+                    }""")
+                    if clicked:
+                        print(f"  [Discord GW] Clicked '{clicked}' on channel {channel_id}")
+                        await asyncio.sleep(2)
+                        setattr(self, last_key, time.time())
                 except Exception:
                     pass
 
