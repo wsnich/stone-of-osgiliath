@@ -311,7 +311,7 @@ async def discord_gateway_loop():
                         "data": tracked.to_dict(),
                     })
 
-                    # DM notification
+                    # DM notification — only for deals below market price
                     dm_user = config.get("discord", {}).get("dm_user_id")
                     bot_token = config.get("discord", {}).get("bot_token", "")
                     dm_token = f"Bot {bot_token}" if bot_token else ""
@@ -320,43 +320,49 @@ async def discord_gateway_loop():
                         title = _extract_product_name(entry)
                         retailer_name = _extract_retailer(entry)
                         price = entry.get("price")
-                        price_str = f"${price:.2f}" if price else "no price"
-                        score_str = ""
+
+                        # Find matching TCGPlayer product for deal scoring
+                        best_match = None
+                        pct = None
                         if price:
                             from web.state import _normalize_name, _tokenize, _jaccard
-                            title_norm = _normalize_name(title)
-                            title_tokens = _tokenize(title_norm)
-                            best_match = None
+                            title_tokens = _tokenize(_normalize_name(title))
                             best_score = 0.0
                             for ps in app_state.product_statuses:
                                 if ps.site != "tcgplayer" or ps.price is None:
                                     continue
-                                ps_tokens = _tokenize(_normalize_name(ps.name))
-                                sc = _jaccard(title_tokens, ps_tokens)
+                                sc = _jaccard(title_tokens, _tokenize(_normalize_name(ps.name)))
                                 if sc > best_score and sc >= 0.35:
                                     best_score = sc
                                     best_match = ps
                             if best_match:
                                 pct = ((price - best_match.price) / best_match.price) * 100
-                                score_str = f" ({pct:+.0f}% vs TCG ${best_match.price:.2f})"
 
-                        # Build URL — skip bot URLs (refractbot, valoraio)
-                        url = ""
-                        for e in entry.get("embeds", []):
-                            u = e.get("url", "")
-                            if u and "refractbot" not in u and "valoraio" not in u:
-                                url = u
-                                break
+                        # Only DM if price is at least 15% below TCGPlayer market
+                        if best_match and pct is not None and pct <= -15:
+                            price_str = f"${price:.2f}"
+                            score_str = f" ({pct:+.0f}% vs TCG ${best_match.price:.2f})"
 
-                        retailer_str = f"\n🏪 {retailer_name}" if retailer_name else ""
-                        dm_msg = f"🔔 **Deal Alert**\n**{title}**{retailer_str}\n**{price_str}**{score_str}"
-                        if url:
-                            dm_msg += f"\n🔗 {url}"
-                        from web.state import _extract_checkout_links
-                        cart_links = _extract_checkout_links(entry)
-                        for cl in cart_links[:3]:
-                            dm_msg += f"\n🛒 [{cl['label']}]({cl['url']})"
-                        await _discord.send_dm(dm_token, dm_user, dm_msg)
+                            # Build URL — skip bot/tracking URLs
+                            url = ""
+                            for e in entry.get("embeds", []):
+                                u = e.get("url", "")
+                                if u and not any(skip in u for skip in [
+                                    "refractbot", "valoraio", "google.com/aclk",
+                                    "google.com/url", "gclid=",
+                                ]):
+                                    url = u
+                                    break
+
+                            retailer_str = f"\n🏪 {retailer_name}" if retailer_name else ""
+                            dm_msg = f"🔔 **Deal Alert**\n**{title}**{retailer_str}\n**{price_str}**{score_str}"
+                            if url:
+                                dm_msg += f"\n🔗 {url}"
+                            from web.state import _extract_checkout_links
+                            cart_links = _extract_checkout_links(entry)
+                            for cl in cart_links[:3]:
+                                dm_msg += f"\n🛒 [{cl['label']}]({cl['url']})"
+                            await _discord.send_dm(dm_token, dm_user, dm_msg)
 
                 kw_str = ", ".join(result.get("matched_keywords", []))
                 price_str = f" — ${result['price']:.2f}" if result.get("price") else ""
