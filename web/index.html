@@ -2637,7 +2637,8 @@ document.getElementById('tab-shopping').style.display = 'none';
   try {
     const s = await (await fetch('/api/settings')).json();
     if (s.research_api_key) document.getElementById('tab-research').style.display = '';
-    if (s.gs_enabled) document.getElementById('tab-shopping').style.display = '';
+    // Google Shopping tab shelved — enable via SerpAPI when ready
+    // if (s.gs_enabled) document.getElementById('tab-shopping').style.display = '';
   } catch(e) {}
 })();
 
@@ -3263,7 +3264,8 @@ async function saveSettingsModal() {
   });
   // Show/hide Research/Shopping tabs
   document.getElementById('tab-research').style.display = body.research_api_key ? '' : 'none';
-  document.getElementById('tab-shopping').style.display = body.gs_enabled ? '' : 'none';
+  // Google Shopping tab shelved
+  // document.getElementById('tab-shopping').style.display = body.gs_enabled ? '' : 'none';
   closeSettingsModal();
 }
 
