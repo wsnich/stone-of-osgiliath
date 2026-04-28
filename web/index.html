@@ -1772,28 +1772,6 @@ select.form-input option { background: var(--surface2); }
         </div>
       </div>
 
-      <!-- Marketplace -->
-      <div class="settings-section" data-section="marketplace" style="margin-bottom:2px">
-        <div onclick="toggleSettingsSection('marketplace')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
-          Marketplace (BST) <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
-        </div>
-        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
-          <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
-            <input type="checkbox" id="set-mp-enabled"> Enable marketplace monitoring
-          </label>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div>
-              <label class="form-label">Sell Channel IDs <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
-              <input type="text" class="form-input" id="set-mp-sell" placeholder="Channel ID(s)" style="font-size:10px">
-            </div>
-            <div>
-              <label class="form-label">Buy Channel IDs <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
-              <input type="text" class="form-input" id="set-mp-buy" placeholder="Channel ID(s)" style="font-size:10px">
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- Reddit -->
       <div class="settings-section" data-section="reddit" style="margin-bottom:2px">
         <div onclick="toggleSettingsSection('reddit')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
@@ -1808,33 +1786,6 @@ select.form-input option { background: var(--surface2); }
             <div>
               <label class="form-label">Poll Interval (s) <span style="color:var(--muted);font-weight:400">min 30</span></label>
               <input type="number" class="form-input" id="set-reddit-poll" min="30" max="300" value="60">
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Research -->
-      <!-- Google Shopping -->
-      <div class="settings-section" data-section="shopping" style="margin-bottom:2px">
-        <div onclick="toggleSettingsSection('shopping')" style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
-          Google Shopping <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
-        </div>
-        <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
-          <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
-            <input type="checkbox" id="set-gs-enabled"> Enable Google Shopping scans
-          </label>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-            <div>
-              <label class="form-label">Search Delay (s) <span style="color:var(--muted);font-weight:400">min 180</span></label>
-              <input type="number" class="form-input" id="set-gs-delay" min="180" max="3600" value="300">
-            </div>
-            <div>
-              <label class="form-label">Cycle Interval (hours)</label>
-              <input type="number" class="form-input" id="set-gs-cycle" min="1" max="48" value="6">
-            </div>
-            <div>
-              <label class="form-label">Alert Discount %</label>
-              <input type="number" class="form-input" id="set-gs-alert" min="5" max="50" value="15">
             </div>
           </div>
         </div>
@@ -1977,32 +1928,29 @@ select.form-input option { background: var(--surface2); }
   <div>
     <div class="section-header">
       <div class="tab-bar">
-        <button class="tab-btn active" id="tab-products" onclick="switchTab('products')">Watchlist</button>
-        <button class="tab-btn" id="tab-deals" onclick="switchTab('deals')">Deals</button>
+        <button class="tab-btn" id="tab-products" onclick="switchTab('products')">Watchlist</button>
+        <button class="tab-btn active" id="tab-deals" onclick="switchTab('deals')">Deals</button>
         <button class="tab-btn" id="tab-tcgplayer" onclick="switchTab('tcgplayer')">TCGPlayer</button>
         <button class="tab-btn" id="tab-graded" onclick="switchTab('graded')">Graded</button>
         <button class="tab-btn" id="tab-portfolio" onclick="switchTab('portfolio')">Portfolio</button>
         <button class="tab-btn" id="tab-intelligence" onclick="switchTab('intelligence')">Intelligence</button>
-        <button class="tab-btn" id="tab-shopping" onclick="switchTab('shopping')">Shopping</button>
         <button class="tab-btn" id="tab-research" onclick="switchTab('research')">Research</button>
       </div>
       <button class="btn btn-primary btn-sm" id="add-btn" onclick="handleAddBtn()" style="display:none">+ Add Product</button>
     </div>
 
-    <!-- ── Products tab (hub) ──────────────────────────────── -->
-    <div class="tab-panel active" id="panel-products">
-
+    <!-- ── Products/Watchlist tab ───────────────────────────── -->
+    <div class="tab-panel" id="panel-products">
     <div class="products-grid" id="hub-grid">
       <div class="empty-state">
-        <strong>No products yet</strong>
-        <p>Click <em>+ Add Product</em> to create a product and link deals, retailers, and TCGPlayer data.</p>
+        <strong>No watched items yet</strong>
+        <p>Click <em>+ Add to Watchlist</em> to track a product.</p>
       </div>
     </div>
-
     </div><!-- /panel-products -->
 
     <!-- ── Deals tab (Discord-aggregated) ──────────────────── -->
-    <div class="tab-panel" id="panel-deals">
+    <div class="tab-panel active" id="panel-deals">
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
       <span style="font-size:12px;color:var(--muted)">Aggregated from Discord feeds</span>
@@ -2113,31 +2061,6 @@ select.form-input option { background: var(--surface2); }
 
     </div><!-- /panel-intelligence -->
 
-    <!-- ── Shopping tab ───────────────────────────────────── -->
-    <div class="tab-panel" id="panel-shopping">
-
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <span style="font-size:12px;color:var(--muted)">Google Shopping — indie retailer deals for your watchlist</span>
-      <button class="btn btn-ghost btn-sm" onclick="loadShopping()" style="font-size:10px;padding:3px 10px;margin-left:auto">Reload</button>
-      <button class="btn btn-primary btn-sm" onclick="scanGoogleShopping()" id="gs-scan-btn" style="font-size:10px;padding:3px 10px">Scan Now</button>
-    </div>
-
-    <!-- Summary cards -->
-    <div id="shopping-summary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px"></div>
-
-    <!-- Results by product -->
-    <div id="shopping-results">
-      <div class="empty-state">
-        <strong>No Google Shopping results yet</strong>
-        <p>Enable Google Shopping in Settings to scan for indie retailer deals on your watchlist products.</p>
-      </div>
-    </div>
-
-    <!-- Retailer directory -->
-    <div id="shopping-retailers" style="margin-top:16px"></div>
-
-    </div><!-- /panel-shopping -->
-
     <!-- ── Research tab ───────────────────────────────────── -->
     <div class="tab-panel" id="panel-research">
 
@@ -2213,6 +2136,7 @@ select.form-input option { background: var(--surface2); }
           <option value="target">Target</option>
           <option value="bestbuy">Best Buy</option>
           <option value="tcgplayer">TCGPlayer (reference)</option>
+          <option value="manapool">Mana Pool</option>
         </select>
       </div>
       <div class="form-group">
@@ -2285,6 +2209,11 @@ select.form-input option { background: var(--surface2); }
           <option value="Foil">Foil</option>
         </select>
       </div>
+    </div>
+
+    <div class="form-group" id="tcg-manapool-row" style="display:none">
+      <label class="form-label">Mana Pool URL <span style="color:var(--muted);font-weight:400">(optional — fetches MP price alongside)</span></label>
+      <input type="text" class="form-input" id="f-tag-manapool_url" placeholder="https://manapool.com/card/spm/209/gwen-stacy-ghost-spider?conditions=NM&finish=foil">
     </div>
 
     <div id="comic-filters-row" style="display:none">
@@ -2529,6 +2458,17 @@ select.form-input option { background: var(--surface2); }
       <button class="btn btn-ghost btn-sm" onclick="closeSalesModal()">✕</button>
     </div>
     <div class="sales-modal-kw" id="sales-modal-kw" style="display:none"></div>
+    <div class="sales-modal-kw" id="sales-modal-must-kw" style="display:none"></div>
+    <div style="padding:6px 12px 8px;border-bottom:1px solid var(--border);display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <input id="sales-kw-input" type="text" placeholder="Ignore if contains…"
+        style="flex:1;min-width:140px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;color:var(--text);outline:none"
+        onkeydown="if(event.key==='Enter')addIgnoreKeyword()">
+      <button class="btn btn-danger btn-sm" style="font-size:11px;white-space:nowrap" onclick="addIgnoreKeyword()">+ Ignore</button>
+      <input id="sales-must-input" type="text" placeholder="Must contain…"
+        style="flex:1;min-width:140px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;color:var(--text);outline:none"
+        onkeydown="if(event.key==='Enter')addMustKeyword()">
+      <button class="btn btn-start btn-sm" style="font-size:11px;white-space:nowrap" onclick="addMustKeyword()">+ Must</button>
+    </div>
     <div class="sales-modal-list" id="sales-modal-list"></div>
   </div>
 </div>
@@ -2595,9 +2535,6 @@ function connectWS() {
         prependDiscordPost(msg.data);
         if (_activeTab === 'intelligence') loadOverview();
         break;
-      case 'marketplace_listing':
-        handleMarketplaceListing(msg.data);
-        break;
       case 'reddit_post':
         prependRedditPost(msg.data);
         break;
@@ -2607,11 +2544,10 @@ function connectWS() {
       case 'tracked_deals_full':
         trackedDeals = msg.data;
         renderTrackedDeals();
-        renderHubGrid();
         break;
       case 'product_hub_full':
         hubEntries = msg.data;
-        renderHubGrid();
+        if (_activeTab === 'products') renderHubGrid();
         break;
       case 'discord_gateway_status':
         handleGatewayStatus(msg.data);
@@ -2630,22 +2566,19 @@ function connectWS() {
 
 connectWS();
 
-// Hide Research/Shopping tabs until we confirm they're configured
+// Hide Research tab until configured
 document.getElementById('tab-research').style.display = 'none';
-document.getElementById('tab-shopping').style.display = 'none';
 (async () => {
   try {
     const s = await (await fetch('/api/settings')).json();
     if (s.research_api_key) document.getElementById('tab-research').style.display = '';
-    // Google Shopping tab shelved — enable via SerpAPI when ready
-    // if (s.gs_enabled) document.getElementById('tab-shopping').style.display = '';
   } catch(e) {}
 })();
 
 // Restore tab from URL hash after reload
 if (window.location.hash) {
   const tab = window.location.hash.slice(1);
-  if (['deals','products','tcgplayer','graded','portfolio','intelligence','shopping','research'].includes(tab)) switchTab(tab);
+  if (['deals','products','tcgplayer','graded','portfolio','intelligence','research'].includes(tab)) switchTab(tab);
   history.replaceState(null, '', window.location.pathname);
 }
 
@@ -2698,7 +2631,7 @@ function renderFullState(state) {
   renderTrackedDeals();
 
   hubEntries = state.product_hub || [];
-  renderHubGrid();
+  if (_activeTab === 'products') renderHubGrid();
 
   const log = document.getElementById('log-body');
   log.innerHTML = '';
@@ -2810,7 +2743,7 @@ function updateProductCard(p) {
   const i = p.index;
   if (i >= products.length) { products.push(p); }
   else { products[i] = p; }
-  renderHubGrid();
+
   if (_activeTab === 'tcgplayer') renderTcgGrid();
   if (_activeTab === 'graded')  renderComicsGrid();
   // Refresh sales modal if open for this product
@@ -2821,6 +2754,26 @@ function updateProductCard(p) {
     document.getElementById('sales-modal-stats').innerHTML =
       `<span style="color:var(--green)">${visible} kept</span>` +
       (ignored ? ` · <span style="color:var(--red)">${ignored} ignored</span>` : '');
+    // Refresh ignore keyword chips
+    const kw = (p.tags || {}).ignore_keywords || [];
+    const kwEl = document.getElementById('sales-modal-kw');
+    if (kw.length) {
+      kwEl.innerHTML = `<span style="color:var(--muted)">Ignoring:</span> ` +
+        kw.map(k => `<span style="display:inline-flex;align-items:center;gap:3px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin:1px"><b>${esc(k)}</b><span style="cursor:pointer;color:var(--red);font-size:12px" onclick="removeIgnoreKeyword(${i},'${esc(k)}')" title="Remove ignore rule">✕</span></span>`).join(' ');
+      kwEl.style.display = '';
+    } else {
+      kwEl.style.display = 'none';
+    }
+    // Refresh must-contain chips
+    const mustKw = (p.tags || {}).must_keywords || [];
+    const mustKwEl = document.getElementById('sales-modal-must-kw');
+    if (mustKw.length) {
+      mustKwEl.innerHTML = `<span style="color:var(--green)">Must contain:</span> ` +
+        mustKw.map(k => `<span style="display:inline-flex;align-items:center;gap:3px;background:var(--surface3);border:1px solid var(--green);border-radius:4px;padding:1px 6px;margin:1px;color:var(--green)"><b>${esc(k)}</b><span style="cursor:pointer;color:var(--red);font-size:12px" onclick="removeMustKeyword(${i},'${esc(k)}')" title="Remove must-contain rule">✕</span></span>`).join(' ');
+      mustKwEl.style.display = '';
+    } else {
+      mustKwEl.style.display = 'none';
+    }
   }
 }
 
@@ -2992,10 +2945,12 @@ function updateTcgTypeVisibility() {
 function updateTcgFiltersVisibility() {
   const site = document.getElementById('f-site').value;
   const isGradedMode = _activeTab === 'graded';
-  const isTcg = site === 'tcgplayer' && !isGradedMode;
+  const isTcg = (site === 'tcgplayer' || site === 'manapool') && !isGradedMode;
   document.getElementById('tcg-type-row').style.display = isTcg ? '' : 'none';
   const isSingle = document.getElementById('f-tcg-type').value === 'single';
   document.getElementById('tcg-filters-row').style.display = isTcg && isSingle ? '' : 'none';
+  // ManaPool URL field only on TCGPlayer items (not on native manapool items)
+  document.getElementById('tcg-manapool-row').style.display = (site === 'tcgplayer' && !isGradedMode) ? '' : 'none';
   document.getElementById('comic-filters-row').style.display = isGradedMode ? '' : 'none';
   // Hide URL/Site/Max Price for graded items — they're eBay search-only
   document.getElementById('field-url').style.display        = isGradedMode ? 'none' : '';
@@ -3008,8 +2963,9 @@ function updateTcgFiltersVisibility() {
 function openEditModal(i) {
   const p = products[i];
   editingIndex = i;
-  const isTcg = p.site === 'tcgplayer';
-  document.getElementById('modal-title').textContent = isTcg ? 'Edit TCGPlayer Item' : 'Edit Product';
+  const isTcg = p.site === 'tcgplayer' || p.site === 'manapool';
+  const siteLabel = p.site === 'manapool' ? 'Mana Pool' : 'TCGPlayer';
+  document.getElementById('modal-title').textContent = isTcg ? `Edit ${siteLabel} Item` : 'Edit Product';
   document.getElementById('f-name').value      = p.name;
   document.getElementById('f-url').value       = p.url;
   document.getElementById('f-site').value      = p.site;
@@ -3026,6 +2982,7 @@ function openEditModal(i) {
   document.getElementById('f-tag-issue').value        = tags.issue        || '';
   document.getElementById('f-tag-variant').value      = tags.variant      || '';
   document.getElementById('f-tag-artist').value       = tags.artist       || '';
+  document.getElementById('f-tag-manapool_url').value = tags.manapool_url || '';
   // Hide site and max_price for TCGPlayer items
   document.getElementById('f-site').parentElement.style.display = isTcg ? 'none' : '';
   document.getElementById('f-price').parentElement.style.display = isTcg ? 'none' : '';
@@ -3078,11 +3035,13 @@ async function submitProduct() {
   const tis = document.getElementById('f-tag-issue').value.trim();
   const tvr = document.getElementById('f-tag-variant').value.trim();
   const tar = document.getElementById('f-tag-artist').value.trim();
-  if (tc)  tags.condition = tc;
-  if (tpr) tags.printing  = tpr;
-  if (tis) tags.issue     = tis;
-  if (tvr) tags.variant   = tvr;
-  if (tar) tags.artist    = tar;
+  const tmp = document.getElementById('f-tag-manapool_url').value.trim();
+  if (tc)  tags.condition    = tc;
+  if (tpr) tags.printing     = tpr;
+  if (tis) tags.issue        = tis;
+  if (tvr) tags.variant      = tvr;
+  if (tar) tags.artist       = tar;
+  if (tmp) tags.manapool_url = tmp;
   // TCGPlayer tab: force site and max_price
   if (isTcg) {
     site = 'tcgplayer';
@@ -3094,9 +3053,12 @@ async function submitProduct() {
     if (tcgType === 'single') tags.category = 'single';
   }
   if (_activeTab === 'graded' && editingIndex === null) tags.category = 'comic';
-  // Preserve category when editing
+  // Preserve category and learned ignore keywords when editing
   const existingCat = editingIndex !== null ? (products[editingIndex]?.tags || {}).category : null;
   if (existingCat === 'single' || existingCat === 'comic') tags.category = existingCat;
+  const existingTags = editingIndex !== null ? (products[editingIndex]?.tags || {}) : {};
+  if (existingTags.ignore_keywords?.length) tags.ignore_keywords = existingTags.ignore_keywords;
+  if (existingTags.must_keywords?.length)   tags.must_keywords   = existingTags.must_keywords;
   const body = { name, url, site, max_price: price, enabled, check_interval_seconds: interval, tags };
 
   try {
@@ -3122,7 +3084,7 @@ async function submitProduct() {
     const r = await fetch('/api/products');
     if (r.ok) {
       products = await r.json();
-      renderHubGrid();
+    
       renderTcgGrid();
       renderComicsGrid();
     }
@@ -3180,9 +3142,6 @@ async function openSettingsModal() {
   document.getElementById('set-schedule-end').value = data.schedule_end || '23:00';
   document.getElementById('set-data-dir').value = data.data_dir || '';
   document.getElementById('set-graded-interval').value = data.graded_interval_hours || 168;
-  document.getElementById('set-mp-enabled').checked = data.marketplace_enabled || false;
-  document.getElementById('set-mp-sell').value = (data.marketplace_sell_channels || []).join(', ');
-  document.getElementById('set-mp-buy').value = (data.marketplace_buy_channels || []).join(', ');
   document.getElementById('set-reddit-subs').value = (data.reddit_subreddits || []).join(', ');
   document.getElementById('set-reddit-poll').value = data.reddit_poll_interval || 60;
   // user_token and poll_interval removed (Gateway mode only)
@@ -3190,10 +3149,6 @@ async function openSettingsModal() {
   document.getElementById('set-dm-user-id').value = data.dm_user_id || '';
   document.getElementById('set-discord-email').value = data.discord_email || '';
   document.getElementById('set-discord-password').value = data.discord_password || '';
-  document.getElementById('set-gs-enabled').checked = data.gs_enabled || false;
-  document.getElementById('set-gs-delay').value = data.gs_search_delay || 300;
-  document.getElementById('set-gs-cycle').value = data.gs_cycle_hours || 6;
-  document.getElementById('set-gs-alert').value = data.gs_alert_discount || 15;
   document.getElementById('set-research-enabled').checked = data.research_enabled || false;
   document.getElementById('set-research-api-key').value = data.research_api_key || '';
   document.getElementById('set-research-interval').value = data.research_interval_hours || 168;
@@ -3237,9 +3192,6 @@ async function saveSettingsModal() {
     schedule_end: document.getElementById('set-schedule-end').value,
     data_dir: document.getElementById('set-data-dir').value.trim(),
     graded_interval_hours: parseInt(document.getElementById('set-graded-interval').value) || 168,
-    marketplace_enabled: document.getElementById('set-mp-enabled').checked,
-    marketplace_sell_channels: document.getElementById('set-mp-sell').value.trim(),
-    marketplace_buy_channels: document.getElementById('set-mp-buy').value.trim(),
     reddit_subreddits: document.getElementById('set-reddit-subs').value.trim(),
     reddit_poll_interval: parseInt(document.getElementById('set-reddit-poll').value) || 60,
     // user_token and poll_interval removed (Gateway mode only)
@@ -3247,10 +3199,6 @@ async function saveSettingsModal() {
     dm_user_id: document.getElementById('set-dm-user-id').value.trim(),
     discord_email: document.getElementById('set-discord-email').value.trim(),
     discord_password: document.getElementById('set-discord-password').value.trim(),
-    gs_enabled: document.getElementById('set-gs-enabled').checked,
-    gs_search_delay: parseInt(document.getElementById('set-gs-delay').value) || 300,
-    gs_cycle_hours: parseInt(document.getElementById('set-gs-cycle').value) || 6,
-    gs_alert_discount: parseInt(document.getElementById('set-gs-alert').value) || 15,
     research_enabled: document.getElementById('set-research-enabled').checked,
     research_api_key: document.getElementById('set-research-api-key').value.trim(),
     research_interval_hours: parseInt(document.getElementById('set-research-interval').value) || 168,
@@ -3265,7 +3213,6 @@ async function saveSettingsModal() {
   // Show/hide Research/Shopping tabs
   document.getElementById('tab-research').style.display = body.research_api_key ? '' : 'none';
   // Google Shopping tab shelved
-  // document.getElementById('tab-shopping').style.display = body.gs_enabled ? '' : 'none';
   closeSettingsModal();
 }
 
@@ -3781,26 +3728,26 @@ async function toggleRetailer(retailer, enabled) {
 
 function applyFilters() {
   TAG_KEYS.forEach(k => { _filters[k] = document.getElementById(`filter-${k}`).value; });
-  renderHubGrid();
+
 }
 
 function clearFilters() {
   _filters = {};
   TAG_KEYS.forEach(k => { document.getElementById(`filter-${k}`).value = ''; });
-  renderHubGrid();
+
 }
 
 // ── Tab switching ───────────────────────────────────────────────
 
-let _activeTab = 'products';
+let _activeTab = 'deals';
 
 function switchTab(tab) {
   _activeTab = tab;
-  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence', 'shopping', 'research']) {
-    document.getElementById(`tab-${t}`).classList.toggle('active', tab === t);
-    document.getElementById(`panel-${t}`).classList.toggle('active', tab === t);
+  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence', 'research']) {
+    document.getElementById(`tab-${t}`)?.classList.toggle('active', tab === t);
+    document.getElementById(`panel-${t}`)?.classList.toggle('active', tab === t);
   }
-  const labels = { products: '+ Add to Watchlist', tcgplayer: '+ Add TCGPlayer', graded: '+ Add Graded', portfolio: '+ Add Item' };
+  const labels = { tcgplayer: '+ Add TCGPlayer', graded: '+ Add Graded', portfolio: '+ Add Item', products: '+ Add to Watchlist' };
   const addBtn = document.getElementById('add-btn');
   if (labels[tab]) {
     addBtn.textContent = labels[tab];
@@ -3810,13 +3757,112 @@ function switchTab(tab) {
   }
 
   if (tab === 'deals')        renderTrackedDeals();
-  if (tab === 'products')     renderHubGrid();
   if (tab === 'tcgplayer')    renderTcgGrid();
   if (tab === 'intelligence') loadOverview();
   if (tab === 'graded')       renderComicsGrid();
   if (tab === 'portfolio')    loadPortfolio();
-  if (tab === 'shopping')      loadShopping();
   if (tab === 'research')     loadResearch();
+  if (tab === 'products')     renderHubGrid();
+}
+
+// ── Product Hub (Watchlist) ──────────────────────────────────────
+
+let hubEntries = [];
+
+function renderHubGrid() {
+  const grid = document.getElementById('hub-grid');
+  if (!grid) return;
+  if (!hubEntries.length) {
+    grid.innerHTML = `<div class="empty-state"><strong>No watched items yet</strong><p>Click <em>+ Add to Watchlist</em> to track a product.</p></div>`;
+    return;
+  }
+  grid.innerHTML = hubEntries.map(hubCardHTML).join('');
+}
+
+function hubCardHTML(entry) {
+  const tags = entry.tags || {};
+  const tagChips = [tags.set, tags.product_type].filter(Boolean).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('');
+  const img = entry.image_url
+    ? `<div class="card-img-wrap"><img class="card-img" src="${escUrl(entry.image_url)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'"></div>`
+    : '';
+  const retailers = (entry.retailer_urls || []).map(r =>
+    `<a href="${escUrl(r.url)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:10px">${esc(r.retailer)}</a>`
+  ).join('');
+  return `
+  <div class="product-card" id="hub-card-${entry.id}" style="position:relative">
+    ${img}
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:4px">
+      <strong style="font-size:13px">${esc(entry.name)}</strong>
+      <div style="display:flex;gap:4px;flex-shrink:0">
+        <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="openHubModal('${entry.id}')">Edit</button>
+        <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px;color:var(--red)" onclick="deleteHubEntry('${entry.id}')">✕</button>
+      </div>
+    </div>
+    ${tagChips ? `<div style="margin-top:4px">${tagChips}</div>` : ''}
+    ${retailers ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">${retailers}</div>` : ''}
+  </div>`;
+}
+
+function openHubModal(entryId) {
+  const modal = document.getElementById('hub-modal');
+  const titleEl = document.getElementById('hub-modal-title');
+  document.getElementById('hub-edit-id').value = entryId || '';
+  if (entryId) {
+    const entry = hubEntries.find(e => e.id === entryId);
+    if (!entry) return;
+    titleEl.textContent = 'Edit Watchlist Item';
+    document.getElementById('hub-name').value = entry.name || '';
+    document.getElementById('hub-set').value = (entry.tags || {}).set || '';
+    document.getElementById('hub-product_type').value = (entry.tags || {}).product_type || '';
+    document.getElementById('hub-image').value = entry.image_url || '';
+  } else {
+    titleEl.textContent = 'Add to Watchlist';
+    document.getElementById('hub-name').value = '';
+    document.getElementById('hub-set').value = '';
+    document.getElementById('hub-product_type').value = '';
+    document.getElementById('hub-image').value = '';
+  }
+  modal.style.display = 'flex';
+  document.getElementById('hub-name').focus();
+}
+
+function closeHubModal() {
+  document.getElementById('hub-modal').style.display = 'none';
+}
+
+async function submitHubEntry() {
+  const name = document.getElementById('hub-name').value.trim();
+  if (!name) { alert('Name is required'); return; }
+  const entryId = document.getElementById('hub-edit-id').value;
+  const body = {
+    name,
+    image_url: document.getElementById('hub-image').value.trim() || null,
+    tags: {
+      set: document.getElementById('hub-set').value.trim() || undefined,
+      product_type: document.getElementById('hub-product_type').value.trim() || undefined,
+    },
+  };
+  // Remove undefined tag keys
+  Object.keys(body.tags).forEach(k => body.tags[k] === undefined && delete body.tags[k]);
+  try {
+    if (entryId) {
+      await fetch(`/api/product-hub/${entryId}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    } else {
+      await fetch('/api/product-hub', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    }
+    closeHubModal();
+  } catch (e) {
+    alert('Failed to save entry: ' + e);
+  }
+}
+
+async function deleteHubEntry(entryId) {
+  if (!confirm('Remove this item from your watchlist?')) return;
+  try {
+    await fetch(`/api/product-hub/${entryId}`, { method: 'DELETE' });
+  } catch (e) {
+    alert('Failed to delete entry: ' + e);
+  }
 }
 
 // ── TCGPlayer rendering ─────────────────────────────────────────
@@ -3830,7 +3876,7 @@ function isSingle(p) {
 }
 
 function isTcgProduct(p) {
-  return p.site === 'tcgplayer';
+  return p.site === 'tcgplayer' || p.site === 'manapool';
 }
 
 function setTcgView(view) {
@@ -3955,8 +4001,9 @@ function tcgSetGroupHTML(set, cards) {
 
 function tcgCondensedGroupBody(set, cards, isOpen) {
   const key = set.replace(/[^\w]/g, '-');
+  const hasMp = cards.some(p => p.mp_market_price != null || p.mp_low_price != null || (p.tags || {}).manapool_url);
   const header = `<div class="tcg-table-header">
-    <span></span><span>Name</span><span>Market</span><span>Low</span><span>Qty</span><span>eBay Med</span><span>Sold</span><span></span>
+    <span></span><span>Name</span><span>Market</span><span>Low</span><span>Qty</span>${hasMp ? '<span style="color:#89dceb">MP Low</span>' : ''}<span>eBay Med</span><span>Sold</span><span></span>
   </div>`;
 
   const rows = cards.map(p => {
@@ -3978,6 +4025,8 @@ function tcgCondensedGroupBody(set, cards, isOpen) {
     const st = _supplyBadge(trend.listings_trend);
     const err = p.error ? `<span style="color:var(--red);font-size:9px" title="${esc(p.error)}">!</span>` : '';
     const chk = p.checking ? `<span style="color:var(--green);font-size:9px">...</span>` : '';
+    const mpLow = p.mp_low_price != null ? `$${p.mp_low_price.toFixed(2)}` : ((p.tags||{}).manapool_url ? '—' : '');
+    const mpTitle = p.mp_market_price != null ? `MP market $${p.mp_market_price.toFixed(2)}` : 'Mana Pool';
 
     return `<div class="tcg-table-row" draggable="true" data-index="${i}" data-set="${esc(set)}">
       <div>${img}</div>
@@ -3988,6 +4037,7 @@ function tcgCondensedGroupBody(set, cards, isOpen) {
       <div style="color:var(--text)">${market} ${pt}${chk}${err}</div>
       <div style="color:var(--green)">${low}</div>
       <div>${qty} ${st}</div>
+      ${hasMp ? `<div style="color:#89dceb" title="${mpTitle}">${mpLow}</div>` : ''}
       <div style="color:#f9e2af">${ebayMed}</div>
       <div>${sold}</div>
       <div style="display:flex;gap:3px;justify-content:flex-end">
@@ -4237,6 +4287,11 @@ function renderHistogramData(listingPrices, opts = {}) {
   const shippingNote = hasShipping
     ? `<div><span style="color:var(--muted);font-size:10px">incl. shipping</span></div>` : '';
 
+  const _hp = products[_histogramProductIndex];
+  const mpLowStat  = _hp?.mp_low_price  != null ? `<div><span style="font-weight:700;color:#89dceb">$${_hp.mp_low_price.toFixed(2)}</span> <span style="color:#89dceb;font-size:10px">MP LOW</span></div>` : '';
+  const mpMktStat  = _hp?.mp_market_price != null ? `<div><span style="font-weight:700;color:#89dceb">$${_hp.mp_market_price.toFixed(2)}</span> <span style="color:#89dceb;font-size:10px">MP MKT</span></div>` : '';
+  const mpQtyStat  = _hp?.mp_quantity != null ? `<div><span style="font-weight:700;color:#89dceb">${_hp.mp_quantity}</span> <span style="color:#89dceb;font-size:10px">MP QTY</span></div>` : '';
+
   document.getElementById('histogram-stats').innerHTML = `
     <div><span style="font-weight:700">$${dataMin.toFixed(2)}</span> <span style="color:var(--muted);font-size:10px">LOW</span></div>
     <div><span style="font-weight:700">$${median.toFixed(2)}</span> <span style="color:var(--muted);font-size:10px">MEDIAN</span></div>
@@ -4244,7 +4299,7 @@ function renderHistogramData(listingPrices, opts = {}) {
     <div><span style="font-weight:700">$${dataMax.toFixed(2)}</span> <span style="color:var(--muted);font-size:10px">HIGH</span></div>
     <div><span style="font-weight:700">${listingCount}</span> <span style="color:var(--muted);font-size:10px">LISTINGS</span></div>
     <div><span style="font-weight:700">${totalQty}</span> <span style="color:var(--muted);font-size:10px">TOTAL QTY</span></div>
-    ${prunedNote}${shippingNote}`;
+    ${prunedNote}${shippingNote}${mpLowStat}${mpMktStat}${mpQtyStat}`;
 
   let min, max, binCount, binSize;
   if (opts.globalBins) {
@@ -4391,19 +4446,21 @@ async function loadHistogramTrend(index) {
         }
       }
     }
-    // Also add individual latestsales if we have them
+    // Also add individual latestsales if we have them (skip IQR outliers)
     if (p?.tcg_sales) {
+      const tcgPrices = p.tcg_sales.filter(s => s.price > 0).map(s => s.price);
+      const tcgOutliers = iqrOutlierSet(tcgPrices);
       for (const s of p.tcg_sales) {
-        if (s.price && s.date) {
+        if (s.price && s.date && !tcgOutliers.has(s.price)) {
           salesPoints.push({x: new Date(s.date), y: s.price, source: 'TCGPlayer Sale', label: `TCG Sale: $${s.price.toFixed(2)} (${s.condition || ''} ${s.variant || ''})`.trim()});
         }
       }
     }
 
-    // eBay sold data
+    // eBay sold data (skip ignored and statistical outliers)
     if (p?.ebay_sales) {
       for (const s of p.ebay_sales) {
-        if (s.price && s.soldDate && !s.ignored) {
+        if (s.price && s.soldDate && !s.ignored && !s.outlier) {
           salesPoints.push({x: new Date(s.soldDate), y: s.price, source: 'eBay', label: `eBay: $${s.price.toFixed(2)} (${s.grade || 'Raw'})`});
         }
       }
@@ -4505,6 +4562,21 @@ function renderSalesChart(salesPoints) {
   const fmtDate = d => d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
   const allLabels = [...new Set(salesPoints.map(s => fmtDate(s.x)))];
 
+  // Clamp bucket lows: if a bucket's low is an IQR outlier vs all market prices, replace it
+  // with the market price (handles fraudulent $4.99-type sales baked into TCGPlayer history)
+  if (tcgHistory.length >= 4) {
+    const marketPrices = tcgHistory.map(s => s.y).filter(v => v > 0);
+    const outlierSet = iqrOutlierSet(marketPrices);
+    // Also detect if the low itself is an extreme outlier relative to market prices
+    const allLows = tcgHistory.map(s => s.low || s.y).filter(v => v > 0);
+    const lowOutliers = iqrOutlierSet(allLows);
+    for (const s of tcgHistory) {
+      if (s.low && lowOutliers.has(s.low)) {
+        s.low = s.y;  // replace outlier low with that day's market price
+      }
+    }
+  }
+
   const datasets = [];
 
   // TCGPlayer daily market price as a line
@@ -4553,6 +4625,18 @@ function renderSalesChart(salesPoints) {
     });
   }
 
+  // ManaPool current low price as a flat dashed reference line
+  const _mpP = products[_histogramProductIndex];
+  if (_mpP?.mp_low_price != null && allLabels.length) {
+    datasets.push({
+      label: `MP Low ($${_mpP.mp_low_price.toFixed(2)})`,
+      type: 'line',
+      data: allLabels.map(l => ({x: l, y: _mpP.mp_low_price})),
+      borderColor: '#89dceb', borderWidth: 1.5, borderDash: [4, 4],
+      pointRadius: 0, tension: 0, fill: false, order: 4,
+    });
+  }
+
   _histogramSalesChart = new Chart(canvas, {
     type: 'scatter',
     data: { labels: allLabels, datasets },
@@ -4584,6 +4668,20 @@ function renderSalesChart(salesPoints) {
       },
     },
   });
+}
+
+function iqrOutlierSet(prices) {
+  // Returns a Set of prices that are IQR outliers (requires >=4 points).
+  if (prices.length < 4) return new Set();
+  const sorted = [...prices].sort((a, b) => a - b);
+  const n = sorted.length;
+  const q1 = sorted[Math.floor(n / 4)];
+  const q3 = sorted[Math.floor(3 * n / 4)];
+  const iqr = q3 - q1;
+  if (iqr === 0) return new Set();
+  const lo = q1 - 1.5 * iqr;
+  const hi = q3 + 1.5 * iqr;
+  return new Set(prices.filter(p => p < lo || p > hi));
 }
 
 function computeGlobalBins(snapshots) {
@@ -5349,10 +5447,11 @@ const _openSalesLists = new Set();
 
 function buildEbaySalesList(p, i) {
   if (!p.ebay_sales || !p.ebay_sales.length) return '';
-  const visible = p.ebay_sales.filter(s => !s.ignored).length;
-  const ignored = p.ebay_sales.length - visible;
+  const ignored = p.ebay_sales.filter(s => s.ignored).length;
+  const outliers = p.ebay_sales.filter(s => !s.ignored && s.outlier).length;
+  const visible = p.ebay_sales.length - ignored - outliers;
   return `<div class="ebay-sales-toggle" onclick="openSalesModal(${i})">
-    ${visible} kept${ignored ? ` · ${ignored} ignored` : ''} — click to review
+    ${visible} kept${ignored ? ` · ${ignored} ignored` : ''}${outliers ? ` · ${outliers} outlier${outliers>1?'s':''}` : ''} — click to review
   </div>`;
 }
 
@@ -5366,21 +5465,34 @@ function openSalesModal(i) {
   document.getElementById('sales-modal-title').textContent = p.name;
 
   // Stats
-  const visible = p.ebay_sales.filter(s => !s.ignored);
-  const ignored = p.ebay_sales.length - visible.length;
+  const ignoredSales = p.ebay_sales.filter(s => s.ignored).length;
+  const outlierSales = p.ebay_sales.filter(s => !s.ignored && s.outlier).length;
+  const visibleCount = p.ebay_sales.length - ignoredSales - outlierSales;
   document.getElementById('sales-modal-stats').innerHTML =
-    `<span style="color:var(--green)">${visible.length} kept</span>` +
-    (ignored ? ` · <span style="color:var(--red)">${ignored} ignored</span>` : '');
+    `<span style="color:var(--green)">${visibleCount} kept</span>` +
+    (ignoredSales ? ` · <span style="color:var(--red)">${ignoredSales} ignored</span>` : '') +
+    (outlierSales ? ` · <span style="color:var(--yellow)">${outlierSales} outlier${outlierSales>1?'s':''}</span>` : '');
 
-  // Keywords — show as removable chips
+  // Ignore keyword chips
   const kw = (p.tags || {}).ignore_keywords || [];
   const kwEl = document.getElementById('sales-modal-kw');
   if (kw.length) {
-    kwEl.innerHTML = `<span style="color:var(--muted)">Auto-ignoring:</span> ` +
-      kw.map(k => `<span style="display:inline-flex;align-items:center;gap:3px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin:1px"><b>${esc(k)}</b><span style="cursor:pointer;color:var(--red);font-size:12px" onclick="removeIgnoreKeyword(${i},'${esc(k)}')" title="Remove this auto-ignore rule">✕</span></span>`).join(' ');
+    kwEl.innerHTML = `<span style="color:var(--muted)">Ignoring:</span> ` +
+      kw.map(k => `<span style="display:inline-flex;align-items:center;gap:3px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;padding:1px 6px;margin:1px"><b>${esc(k)}</b><span style="cursor:pointer;color:var(--red);font-size:12px" onclick="removeIgnoreKeyword(${i},'${esc(k)}')" title="Remove ignore rule">✕</span></span>`).join(' ');
     kwEl.style.display = '';
   } else {
     kwEl.style.display = 'none';
+  }
+
+  // Must-contain keyword chips
+  const mustKw = (p.tags || {}).must_keywords || [];
+  const mustKwEl = document.getElementById('sales-modal-must-kw');
+  if (mustKw.length) {
+    mustKwEl.innerHTML = `<span style="color:var(--green)">Must contain:</span> ` +
+      mustKw.map(k => `<span style="display:inline-flex;align-items:center;gap:3px;background:var(--surface3);border:1px solid var(--green);border-radius:4px;padding:1px 6px;margin:1px;color:var(--green)"><b>${esc(k)}</b><span style="cursor:pointer;color:var(--red);font-size:12px" onclick="removeMustKeyword(${i},'${esc(k)}')" title="Remove must-contain rule">✕</span></span>`).join(' ');
+    mustKwEl.style.display = '';
+  } else {
+    mustKwEl.style.display = 'none';
   }
 
   // Build rows
@@ -5428,18 +5540,19 @@ function renderSalesModalList(p, i) {
   let html = '';
   for (const grade of sortedGrades) {
     const items = groups[grade];
-    const keptCount = items.filter(s => !s.ignored).length;
-    const ignoredCount = items.length - keptCount;
+    const keptCount = items.filter(s => !s.ignored && !s.outlier).length;
+    const ignoredCount = items.filter(s => s.ignored).length;
+    const outlierCount = items.filter(s => !s.ignored && s.outlier).length;
     const isGraded = grade !== 'Raw';
     const headerColor = isGraded ? '#f9e2af' : 'var(--muted)';
     html += `<div style="padding:6px 0 3px;margin-top:6px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
       <span style="font-size:11px;font-weight:700;color:${headerColor};text-transform:uppercase;letter-spacing:0.05em">${esc(grade)}</span>
-      <span style="font-size:10px;color:var(--muted)">${keptCount} kept${ignoredCount ? ` · ${ignoredCount} ignored` : ''}</span>
+      <span style="font-size:10px;color:var(--muted)">${keptCount} kept${ignoredCount ? ` · ${ignoredCount} ignored` : ''}${outlierCount ? ` · <span style="color:var(--yellow)">${outlierCount} outlier${outlierCount>1?'s':''}</span>` : ''}</span>
     </div>`;
 
     html += items.map(s => {
       const si = s._si;
-      const cls = s.ignored ? ' ignored' : '';
+      const cls = s.ignored ? ' ignored' : (s.outlier ? ' ignored' : '');
       const priceClass = s.bestOffer ? ' best-offer' : '';
       const btnLabel = s.ignored ? '↩' : '✕';
       const btnClass = s.ignored ? 'btn-start' : 'btn-danger';
@@ -5457,7 +5570,7 @@ function renderSalesModalList(p, i) {
         <span class="sale-price${priceClass}">$${s.price.toFixed(2)}${s.bestOffer ? '~' : ''}</span>
         ${gradeSelect}
         <span style="font-size:10px;color:var(--muted)">${dateStr}</span>
-        <span class="sale-title" title="${esc(s.title)}">${esc(s.title)}${s.bestOffer ? ' <span style="color:var(--yellow);font-size:10px">(offer)</span>' : ''}${s.grade_override ? ' <span style="color:var(--gold);font-size:9px">(manual)</span>' : ''}${s.auto_ignored ? ' <span style="color:var(--purple);font-size:10px">(auto)</span>' : ''}</span>
+        <span class="sale-title" title="${esc(s.title)}">${esc(s.title)}${s.bestOffer ? ' <span style="color:var(--yellow);font-size:10px">(offer)</span>' : ''}${s.grade_override ? ' <span style="color:var(--gold);font-size:9px">(manual)</span>' : ''}${s.auto_ignored ? ' <span style="color:var(--purple);font-size:10px">(auto)</span>' : ''}${s.outlier && !s.ignored ? ' <span style="color:var(--yellow);font-size:10px" title="Excluded as statistical outlier — price is far from the typical range">⚠ outlier</span>' : ''}</span>
         <div class="sale-actions">
           <button class="btn ${btnClass} btn-sm" style="font-size:10px;padding:2px 6px" onclick="salesModalIgnore(${i},'${titleSafe}',${!s.ignored})">${btnLabel}</button>
         </div>
@@ -5470,6 +5583,38 @@ function renderSalesModalList(p, i) {
 
 async function removeIgnoreKeyword(productIndex, keyword) {
   await fetch(`/api/products/${productIndex}/remove-keyword`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword }),
+  });
+}
+
+async function addIgnoreKeyword() {
+  const input = document.getElementById('sales-kw-input');
+  const keyword = (input.value || '').trim().toLowerCase();
+  if (!keyword || _salesModalIndex === null) return;
+  input.value = '';
+  await fetch(`/api/products/${_salesModalIndex}/add-keyword`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword }),
+  });
+}
+
+async function addMustKeyword() {
+  const input = document.getElementById('sales-must-input');
+  const keyword = (input.value || '').trim().toLowerCase();
+  if (!keyword || _salesModalIndex === null) return;
+  input.value = '';
+  await fetch(`/api/products/${_salesModalIndex}/add-must-keyword`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword }),
+  });
+}
+
+async function removeMustKeyword(productIndex, keyword) {
+  await fetch(`/api/products/${productIndex}/remove-must-keyword`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ keyword }),
@@ -5543,271 +5688,10 @@ function clearComicsFilters() {
   renderComicsGrid();
 }
 
-// ── Product Hub (centralized product view) ──────────────────────
-
-let hubEntries = [];
-
 function handleAddBtn() {
   if (_activeTab === 'products') { openHubModal(); return; }
   openModal();
 }
-
-function renderHubGrid() {
-  const grid = document.getElementById('hub-grid');
-  if (!grid) return;
-
-  if (!hubEntries.length) {
-    grid.innerHTML = '<div class="empty-state"><strong>No watched items yet</strong><p>Click <em>+ Add to Watchlist</em> to track a product across retailers, deals, and TCGPlayer data.</p></div>';
-    return;
-  }
-
-  grid.innerHTML = hubEntries.map(e => hubCardHTML(e)).join('');
-}
-
-function hubCardHTML(e) {
-  // Use hub image, fall back to linked TCGPlayer item's image
-  let imgSrc = e.image_url;
-  if (!imgSrc && e.tcgplayer_index != null) {
-    const linked = products[e.tcgplayer_index];
-    if (linked?.image_url) imgSrc = linked.image_url;
-  }
-  const imgHTML = imgSrc
-    ? `<img src="${escUrl(imgSrc)}" alt="" loading="lazy" style="width:70px;height:70px;object-fit:contain;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`
-    : `<div style="width:70px;height:70px;flex-shrink:0;background:var(--surface2);border-radius:4px"></div>`;
-
-  const tags = e.tags || {};
-  const tagChips = [
-    tags.set          ? `<span class="tag" style="background:#1e1e2a;color:var(--blue)">${esc(tags.set)}</span>` : '',
-    tags.product_type ? `<span class="tag" style="background:#1a2a1a;color:var(--green)">${esc(tags.product_type)}</span>` : '',
-  ].filter(Boolean).join('');
-
-  // TCGPlayer reference data — compact inline
-  let tcgInfo = '';
-  if (e.tcgplayer_index != null) {
-    const p = products[e.tcgplayer_index];
-    if (p) {
-      const mkt = p.price != null ? `<span style="color:var(--text);font-weight:700">$${p.price.toFixed(2)}</span>` : '';
-      const low = p.tcg_low_price != null ? `<span style="color:var(--green)">$${p.tcg_low_price.toFixed(2)}</span>` : '';
-      const qty = p.tcg_quantity != null ? `<span style="color:var(--muted)">${p.tcg_quantity}</span>` : '';
-      tcgInfo = `<div style="font-size:11px;display:flex;gap:6px;align-items:center">
-        <span style="color:#c9a84c;font-weight:700;font-size:10px">TCG</span>
-        ${mkt} ${low ? `<span style="color:var(--muted);font-size:9px">low</span> ${low}` : ''}
-        ${qty ? `<span style="color:var(--muted);font-size:9px">×</span>${qty}` : ''}
-        <button class="btn btn-ghost btn-sm" onclick="openHistogram(${e.tcgplayer_index})" title="Distribution" style="padding:1px 4px;font-size:9px">📊</button>
-      </div>`;
-    }
-  }
-
-  // Retailer links — inline chips
-  const retailerChips = (e.retailer_urls || []).map(r =>
-    `<a href="${escUrl(r.url)}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none;font-size:10px;padding:1px 5px;background:var(--surface2);border-radius:3px">${esc(r.retailer)} ↗</a>`
-  ).join('');
-  const addRetailerBtn = `<button class="btn btn-ghost btn-sm" onclick="addRetailerUrl('${e.id}')" style="padding:0 4px;font-size:9px;color:var(--muted)">+</button>`;
-
-  // Recent deals — compact
-  const linkedDeals = (e.deal_ids || []).map(id => trackedDeals.find(d => d.id === id)).filter(Boolean);
-  const dealChips = linkedDeals.slice(0, 4).map(d => {
-    const bp = d.best_price != null ? `$${d.best_price.toFixed(2)}` : '?';
-    const ret = Object.keys(d.retailer_prices || {})[0] || '';
-    const carts = (d.checkout_urls || []).slice(0, 2).map(cu =>
-      `<a href="${escUrl(cu.url)}" target="_blank" rel="noopener" style="color:var(--green);text-decoration:none;font-size:8px;padding:0 3px;background:#1a3020;border-radius:2px" title="${esc(cu.label)}">${esc(cu.label)}</a>`
-    ).join('');
-    return `<span style="font-size:10px;padding:1px 5px;background:var(--surface2);border-radius:3px;display:inline-flex;align-items:center;gap:3px">
-      <span style="color:var(--green);font-weight:600">${bp}</span>
-      ${ret ? `<span style="color:var(--muted)">${esc(ret)}</span>` : ''}
-      ${carts}
-      <button style="background:none;border:none;color:var(--red);cursor:pointer;font-size:9px;padding:0" onclick="unassignDealFromHub('${e.id}','${d.id}')" title="Remove">✕</button>
-    </span>`;
-  }).join('');
-
-  // Action buttons
-  const actions = `<div style="display:flex;gap:3px;align-items:center;margin-left:auto;flex-shrink:0">
-    <button class="btn btn-ghost btn-sm" onclick="openHubEditModal('${e.id}')" title="Edit" style="padding:1px 5px;font-size:9px">✎</button>
-    <button class="btn btn-ghost btn-sm" onclick="assignDealToHub('${e.id}')" title="Link deal" style="padding:1px 5px;font-size:9px">🔗</button>
-    <button class="btn btn-ghost btn-sm" onclick="linkTcgToHub('${e.id}')" title="Link TCGPlayer" style="padding:1px 5px;font-size:9px">📊</button>
-    <button class="btn btn-ghost btn-sm" onclick="addRetailerUrl('${e.id}')" title="Add retailer" style="padding:1px 5px;font-size:9px">🏪</button>
-    <button class="btn btn-danger btn-sm" onclick="deleteHubEntry('${e.id}')" title="Delete" style="padding:1px 5px;font-size:9px">✕</button>
-  </div>`;
-
-  return `
-  <div class="product-card hub-card">
-    ${imgHTML}
-    <div style="flex:1;min-width:0">
-      <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:2px">
-        <div style="font-weight:600;font-size:13px;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(e.name)}">${esc(e.name)}</div>
-        ${actions}
-      </div>
-      ${tagChips ? `<div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:3px">${tagChips}</div>` : ''}
-      ${tcgInfo}
-      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:3px">
-        ${retailerChips}
-        ${dealChips}
-        ${!retailerChips && !dealChips ? `<span style="font-size:10px;color:var(--muted)">No retailers or deals linked</span>` : ''}
-      </div>
-    </div>
-  </div>`;
-}
-
-function openHubModal(editId) {
-  const entry = editId ? hubEntries.find(e => e.id === editId) : null;
-  document.getElementById('hub-edit-id').value = editId || '';
-  document.getElementById('hub-modal-title').textContent = entry ? 'Edit Watched Item' : 'Add to Watchlist';
-  document.getElementById('hub-name').value = entry ? entry.name : '';
-  document.getElementById('hub-set').value = entry ? (entry.tags||{}).set || '' : '';
-  document.getElementById('hub-product_type').value = entry ? (entry.tags||{}).product_type || '' : '';
-  document.getElementById('hub-image').value = entry ? entry.image_url || '' : '';
-  document.getElementById('hub-modal').style.display = '';
-  document.getElementById('hub-modal').classList.add('open');
-  document.getElementById('hub-name').focus();
-}
-
-function openHubEditModal(id) { openHubModal(id); }
-
-function closeHubModal() {
-  document.getElementById('hub-modal').style.display = 'none';
-  document.getElementById('hub-modal').classList.remove('open');
-}
-
-async function submitHubEntry() {
-  const id = document.getElementById('hub-edit-id').value;
-  const name = document.getElementById('hub-name').value.trim();
-  if (!name) return;
-  const tags = {};
-  const set = document.getElementById('hub-set').value.trim();
-  const pt = document.getElementById('hub-product_type').value.trim();
-  if (set) tags.set = set;
-  if (pt) tags.product_type = pt;
-  const image_url = document.getElementById('hub-image').value.trim() || null;
-
-  if (id) {
-    await fetch(`/api/product-hub/${id}`, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, tags, image_url}),
-    });
-  } else {
-    await fetch('/api/product-hub', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, tags, image_url}),
-    });
-  }
-  closeHubModal();
-}
-
-async function deleteHubEntry(id) {
-  if (!confirm('Delete this product?')) return;
-  await fetch(`/api/product-hub/${id}`, {method: 'DELETE'});
-}
-
-function addRetailerUrl(entryId) {
-  const html = `
-  <div class="modal-backdrop open" id="add-retailer-backdrop" onclick="if(event.target===this){this.remove()}">
-    <div class="modal" style="max-width:400px">
-      <div class="modal-title">Add Retailer Link</div>
-      <div style="display:grid;grid-template-columns:120px 1fr;gap:8px;margin-bottom:12px">
-        <div><label class="form-label">Retailer</label><input type="text" class="form-input" id="add-retailer-name" placeholder="Walmart"></div>
-        <div><label class="form-label">URL</label><input type="text" class="form-input" id="add-retailer-url" placeholder="https://..."></div>
-      </div>
-      <div style="display:flex;gap:6px;justify-content:flex-end">
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('add-retailer-backdrop').remove()">Cancel</button>
-        <button class="btn btn-primary btn-sm" onclick="executeAddRetailer('${entryId}')">Add</button>
-      </div>
-    </div>
-  </div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-  document.getElementById('add-retailer-name').focus();
-}
-
-async function executeAddRetailer(entryId) {
-  const retailer = document.getElementById('add-retailer-name').value.trim();
-  const url = document.getElementById('add-retailer-url').value.trim();
-  document.getElementById('add-retailer-backdrop')?.remove();
-  if (!retailer || !url) return;
-  await fetch(`/api/product-hub/${entryId}/retailer`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({retailer, url}),
-  });
-}
-
-function assignDealToHub(entryId) {
-  const entry = hubEntries.find(e => e.id === entryId);
-  if (!entry) return;
-  const existingIds = new Set(entry.deal_ids || []);
-  const available = trackedDeals.filter(d => !d.dismissed && !existingIds.has(d.id));
-  if (!available.length) { alert('No unlinked deals available.'); return; }
-
-  const options = available.map(d => {
-    const bp = d.best_price != null ? ` ($${d.best_price.toFixed(2)})` : '';
-    return `<option value="${d.id}">${esc(d.name)}${bp}</option>`;
-  }).join('');
-
-  const html = `
-  <div class="modal-backdrop open" id="assign-deal-backdrop" onclick="if(event.target===this){this.remove()}">
-    <div class="modal" style="max-width:420px">
-      <div class="modal-title">Assign Deal to ${esc(entry.name)}</div>
-      <select id="assign-deal-select" style="width:100%;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;padding:6px 8px;margin-bottom:12px">${options}</select>
-      <div style="display:flex;gap:6px;justify-content:flex-end">
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('assign-deal-backdrop').remove()">Cancel</button>
-        <button class="btn btn-primary btn-sm" onclick="executeAssignDeal('${entryId}')">Assign</button>
-      </div>
-    </div>
-  </div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-}
-
-async function executeAssignDeal(entryId) {
-  const dealId = document.getElementById('assign-deal-select').value;
-  document.getElementById('assign-deal-backdrop')?.remove();
-  await fetch(`/api/product-hub/${entryId}/assign-deal`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({deal_id: dealId}),
-  });
-}
-
-async function unassignDealFromHub(entryId, dealId) {
-  await fetch(`/api/product-hub/${entryId}/unassign-deal`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({deal_id: dealId}),
-  });
-}
-
-function linkTcgToHub(entryId) {
-  const tcgProducts = products.filter(p => p.site === 'tcgplayer');
-  if (!tcgProducts.length) { alert('No TCGPlayer items to link.'); return; }
-
-  const options = tcgProducts.map(p => {
-    const price = p.price != null ? ` ($${p.price.toFixed(2)})` : '';
-    return `<option value="${p.index}">${esc(p.name)}${price}</option>`;
-  }).join('');
-
-  const html = `
-  <div class="modal-backdrop open" id="link-tcg-backdrop" onclick="if(event.target===this){this.remove()}">
-    <div class="modal" style="max-width:420px">
-      <div class="modal-title">Link TCGPlayer Item</div>
-      <select id="link-tcg-select" style="width:100%;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;padding:6px 8px;margin-bottom:12px">${options}</select>
-      <div style="display:flex;gap:6px;justify-content:flex-end">
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('link-tcg-backdrop').remove()">Cancel</button>
-        <button class="btn btn-primary btn-sm" onclick="executeLinkTcg('${entryId}')">Link</button>
-      </div>
-    </div>
-  </div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-}
-
-async function executeLinkTcg(entryId) {
-  const idx = parseInt(document.getElementById('link-tcg-select').value);
-  document.getElementById('link-tcg-backdrop')?.remove();
-  await fetch(`/api/product-hub/${entryId}/link-tcgplayer`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({tcgplayer_index: idx}),
-  });
-}
-
 
 // ── Tracked deals (Discord-aggregated) ──────────────────────────
 
@@ -5907,7 +5791,6 @@ function dealTableRowHTML(d) {
     <div style="color:var(--muted);font-size:10px">${count} · ${ago}</div>
     <div style="display:flex;gap:3px;justify-content:flex-end">
       <button class="btn btn-ghost btn-sm" onclick="openDealEditModal('${d.id}')" title="Edit" style="padding:1px 4px;font-size:9px">✎</button>
-      <button class="btn btn-ghost btn-sm" onclick="assignDealToProduct('${d.id}')" title="Assign to product" style="padding:1px 4px;font-size:9px">📦</button>
       <button class="btn btn-ghost btn-sm" onclick="openMergeMenu('${d.id}')" title="Merge" style="padding:1px 4px;font-size:9px">⊕</button>
       ${d.dismissed
         ? `<button class="btn btn-ghost btn-sm" onclick="undismissDeal('${d.id}')" title="Restore" style="padding:1px 4px;font-size:9px;color:var(--green)">↩</button>`
@@ -5994,7 +5877,6 @@ function trackedDealCardHTML(d) {
       <span style="font-size:10px;color:var(--muted)">${sightingCount} alert${sightingCount !== 1 ? 's' : ''} · ${lastSeen}</span>
       <div style="display:flex;gap:4px">
         <button class="btn btn-ghost btn-sm" onclick="openDealEditModal('${d.id}')" title="Edit" style="padding:2px 6px;font-size:10px">✎</button>
-        <button class="btn btn-ghost btn-sm" onclick="assignDealToProduct('${d.id}')" title="Assign to product" style="padding:2px 6px;font-size:10px">📦</button>
         ${mergeBtn}
         ${d.dismissed
           ? `<button class="btn btn-ghost btn-sm" onclick="undismissDeal('${d.id}')" title="Restore" style="padding:2px 6px;font-size:10px;color:var(--green)">↩</button>`
@@ -6066,37 +5948,6 @@ async function submitDealEdit() {
   closeDealEditModal();
 }
 
-function assignDealToProduct(dealId) {
-  if (!hubEntries.length) { alert('No products yet. Create one on the Products tab first.'); return; }
-  const options = hubEntries.map(e => {
-    const tags = e.tags || {};
-    const label = [e.name, tags.set, tags.product_type].filter(Boolean).join(' — ');
-    return `<option value="${e.id}">${esc(label)}</option>`;
-  }).join('');
-
-  const html = `
-  <div class="modal-backdrop open" id="assign-to-product-backdrop" onclick="if(event.target===this){this.remove()}">
-    <div class="modal" style="max-width:420px">
-      <div class="modal-title">Assign Deal to Product</div>
-      <select id="assign-to-product-select" style="width:100%;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:12px;padding:6px 8px;margin-bottom:12px">${options}</select>
-      <div style="display:flex;gap:6px;justify-content:flex-end">
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('assign-to-product-backdrop').remove()">Cancel</button>
-        <button class="btn btn-primary btn-sm" onclick="executeAssignToProduct('${dealId}')">Assign</button>
-      </div>
-    </div>
-  </div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-}
-
-async function executeAssignToProduct(dealId) {
-  const entryId = document.getElementById('assign-to-product-select').value;
-  document.getElementById('assign-to-product-backdrop')?.remove();
-  await fetch(`/api/product-hub/${entryId}/assign-deal`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({deal_id: dealId}),
-  });
-}
 
 function openMergeMenu(dealId) {
   const deal = trackedDeals.find(d => d.id === dealId);
@@ -6550,10 +6401,14 @@ async function loadDiscordKeywords() {
   </div>`;
 
   // Min price filter
-  html += `<div style="width:100%;display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">
+  html += `<div style="width:100%;display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:6px;border-top:1px solid var(--border);flex-wrap:wrap">
     <span style="font-size:10px;color:var(--muted)">Min price: $</span>
     <input type="number" id="discord-min-price" value="${data.min_price || 0}" min="0" step="1" style="width:60px;background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:3px 6px">
     <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" onclick="saveDiscordMinPrice()">Save</button>
+    <label style="display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);cursor:pointer;margin-left:8px" title="When off, messages with no detectable price still pass through if they match keywords">
+      <input type="checkbox" id="discord-require-price" ${data.require_price ? 'checked' : ''} onchange="saveDiscordRequirePrice()" style="width:auto">
+      Filter if no price detected
+    </label>
   </div>`;
 
   el.innerHTML = html;
@@ -6680,16 +6535,19 @@ async function searchDiscordLog() {
     const titleHTML = productUrl
       ? `<a href="${escUrl(productUrl)}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none">${esc(title)} ↗</a>`
       : esc(title);
-    return `<div style="display:grid;grid-template-columns:50px 50px 55px 60px 60px 105px 1fr;gap:6px;align-items:flex-start;font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
+    const reasonHTML = !isShown && r.reason
+      ? `<span style="color:var(--yellow);font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.reason)}">${esc(r.reason)}</span>`
+      : '';
+    return `<div style="display:grid;grid-template-columns:50px 50px 55px 60px 60px 160px 1fr;gap:6px;align-items:flex-start;font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
       <span style="color:${color};font-weight:700;font-size:9px">${badge}</span>
       <span style="color:var(--muted)">${priceStr}</span>
       <span>${scoreBadge}</span>
       <span>${gameHTML}</span>
       <span>${retailerHTML}</span>
-      <span style="color:var(--muted);font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(chName)}</span>
+      <span style="min-width:0">${reasonHTML}</span>
       <div style="min-width:0">
         <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${titleHTML}</div>
-        <div style="color:var(--muted);font-size:9px">${esc(r.reason || '')} · ${esc(r.author)} · ${time}</div>
+        <div style="color:var(--muted);font-size:9px">${esc(r.author)} · ${time}</div>
       </div>
     </div>`;
   }).join('');
@@ -6701,6 +6559,15 @@ async function saveDiscordMinPrice() {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({min_price: val}),
+  });
+}
+
+async function saveDiscordRequirePrice() {
+  const val = document.getElementById('discord-require-price').checked;
+  await fetch('/api/discord/require-price', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({require_price: val}),
   });
 }
 
@@ -6857,44 +6724,6 @@ function togglePanel(name) {
   if (body) body.style.display = _panelOpen[name] ? '' : 'none';
   if (icon) icon.textContent   = _panelOpen[name] ? '▲' : '▼ expand';
 }
-
-// ── Marketplace (BST) ────────────────────────────────────────────
-
-let _marketplaceListings = [];
-
-function handleMarketplaceListing(data) {
-  _marketplaceListings.unshift(data);
-  if (_marketplaceListings.length > 100) _marketplaceListings.pop();
-
-  // Show a toast for matched items below market
-  for (const item of (data.items || [])) {
-    if (item.product_index != null) {
-      const ps = products[item.product_index];
-      if (ps?.price && item.price < ps.price * 0.85) {
-        const pct = ((item.price - ps.price) / ps.price * 100).toFixed(0);
-        showMarketplaceToast(data, item, pct, ps.price);
-      }
-    }
-  }
-}
-
-function showMarketplaceToast(listing, item, pct, market) {
-  const container = document.getElementById('toast-container');
-  if (!container) return;
-  const toast = document.createElement('div');
-  toast.className = 'toast deal';
-  toast.innerHTML = `
-    <div class="toast-title">🏪 Marketplace Deal!</div>
-    <div class="toast-body">
-      ${esc(item.product_name || item.name)}<br>
-      <b>$${item.price.toFixed(2)}</b> (${pct}% vs TCG $${market.toFixed(2)})<br>
-      Seller: @${esc(listing.seller)} —
-      <a href="${escUrl(listing.jump_url)}" target="_blank" style="color:var(--blue)">Jump to message ↗</a>
-    </div>`;
-  container.appendChild(toast);
-  setTimeout(() => toast.remove(), 20000);
-}
-
 
 // ── Reddit feed ──────────────────────────────────────────────────
 
@@ -7187,155 +7016,6 @@ async function submitSetupWizard() {
 
   document.getElementById('setup-wizard').style.display = 'none';
   alert('Setup complete! Restart the app for Discord Gateway monitoring to begin.');
-}
-
-// ── Google Shopping ─────────────────────────────────────────────────
-
-async function loadShopping() {
-  try {
-    const [results, retailers] = await Promise.all([
-      fetch('/api/google-shopping?limit=200').then(r => r.json()),
-      fetch('/api/google-shopping/retailers').then(r => r.json()),
-    ]);
-    renderShoppingSummary(results, retailers);
-    renderShoppingResults(results);
-    renderShoppingRetailers(retailers);
-  } catch(e) {
-    console.warn('Failed to load shopping data:', e);
-  }
-}
-
-function renderShoppingSummary(results, retailers) {
-  const el = document.getElementById('shopping-summary');
-  const uniqueRetailers = new Set(results.map(r => r.retailer_domain)).size;
-  const bestDeal = results.length ? results.reduce((a, b) => (b.discount_pct || 0) > (a.discount_pct || 0) ? b : a) : null;
-  const uniqueProducts = new Set(results.map(r => r.product_name)).size;
-
-  el.innerHTML = `
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:120px">
-      <div style="font-size:10px;color:var(--muted)">Indie Retailers</div>
-      <div style="font-size:14px;font-weight:600">${uniqueRetailers}</div>
-    </div>
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:120px">
-      <div style="font-size:10px;color:var(--muted)">Products Found</div>
-      <div style="font-size:14px;font-weight:600">${uniqueProducts}</div>
-    </div>
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:120px">
-      <div style="font-size:10px;color:var(--muted)">Total Results</div>
-      <div style="font-size:14px;font-weight:600">${results.length}</div>
-    </div>
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:120px">
-      <div style="font-size:10px;color:var(--muted)">Best Deal</div>
-      <div style="font-size:14px;font-weight:600">${bestDeal && bestDeal.discount_pct ? bestDeal.discount_pct.toFixed(0) + '% below' : 'N/A'}</div>
-      <div style="font-size:9px;color:var(--muted)">${bestDeal ? bestDeal.retailer : ''}</div>
-    </div>
-  `;
-}
-
-function renderShoppingResults(results) {
-  const el = document.getElementById('shopping-results');
-  if (!results.length) {
-    el.innerHTML = `<div class="empty-state">
-      <strong>No indie retailer results yet</strong>
-      <p>Enable Google Shopping in Settings, or click Refresh to scan manually.</p>
-    </div>`;
-    return;
-  }
-
-  // Group by product
-  const byProduct = {};
-  for (const r of results) {
-    const key = r.product_name;
-    if (!byProduct[key]) byProduct[key] = { name: key, tcg_market: r.tcg_market, results: [] };
-    byProduct[key].results.push(r);
-  }
-
-  el.innerHTML = Object.values(byProduct).map(group => {
-    const market = group.tcg_market;
-    const sorted = group.results.sort((a, b) => (a.total_price || 999) - (b.total_price || 999));
-
-    return `
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="font-size:13px;font-weight:600;flex:1">${_esc(group.name)}</span>
-        ${market ? `<span style="font-size:10px;color:var(--muted)">TCG Market: $${market.toFixed(2)}</span>` : ''}
-      </div>
-      ${sorted.map(r => {
-        const disc = r.discount_pct;
-        const discColor = disc > 15 ? 'var(--green)' : disc > 5 ? 'var(--accent)' : 'var(--muted)';
-        return `<div style="display:flex;gap:8px;padding:6px 4px;font-size:11px;border-bottom:1px solid var(--border);align-items:center">
-          <div style="flex:1;min-width:0">
-            <a href="${_esc(r.product_url)}" target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">${_esc(r.retailer)}</a>
-            <div style="color:var(--muted);font-size:10px;line-height:1.3;margin-top:1px">${_esc(r.result_title || '')}</div>
-          </div>
-          <div style="text-align:right;white-space:nowrap;min-width:70px">
-            <div style="font-weight:600">\$${r.total_price ? r.total_price.toFixed(2) : '?'}</div>
-            <div style="font-size:9px;color:var(--muted)">${r.shipping_price === 0 ? 'Free ship' : r.shipping_price ? '+$' + r.shipping_price.toFixed(2) : ''}</div>
-          </div>
-          <span style="color:${discColor};font-weight:600;font-size:10px;min-width:40px;text-align:right">${disc ? disc.toFixed(0) + '%' : ''}</span>
-          <button onclick="dismissShoppingResult(${r.id})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px;padding:0" title="Remove">✕</button>
-        </div>`;
-      }).join('')}
-    </div>`;
-  }).join('');
-}
-
-function renderShoppingRetailers(retailers) {
-  const el = document.getElementById('shopping-retailers');
-  if (!retailers.length) { el.innerHTML = ''; return; }
-
-  el.innerHTML = `
-    <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px">RETAILER DIRECTORY</div>
-    <div style="display:grid;grid-template-columns:1fr 60px 60px 80px 80px;gap:4px;font-size:9px;color:var(--muted);font-weight:600;text-transform:uppercase;padding:4px;border-bottom:1px solid var(--border)">
-      <span>Retailer</span><span>Finds</span><span>Products</span><span>Avg Discount</span><span>Last Seen</span>
-    </div>
-    ${retailers.map(r => `
-    <div style="display:grid;grid-template-columns:1fr 60px 60px 80px 80px;gap:4px;padding:4px;font-size:11px;border-bottom:1px solid var(--border)">
-      <span style="color:var(--text)">${_esc(r.retailer)} <span style="color:var(--muted);font-size:9px">${_esc(r.retailer_domain)}</span></span>
-      <span>${r.sightings}</span>
-      <span>${r.products}</span>
-      <span style="color:var(--green);font-weight:600">${r.avg_discount ? r.avg_discount.toFixed(0) + '%' : 'N/A'}</span>
-      <span style="color:var(--muted);font-size:10px">${r.last_seen ? new Date(r.last_seen).toLocaleDateString() : ''}</span>
-    </div>`).join('')}
-  `;
-}
-
-async function scanGoogleShopping() {
-  const btn = document.getElementById('gs-scan-btn');
-  btn.disabled = true;
-  btn.textContent = 'Scanning...';
-
-  // Only scan products on the watchlist (Product Hub)
-  const watchlistIndices = new Set();
-  for (const entry of (hubEntries || [])) {
-    if (entry.tcgplayer_index != null) watchlistIndices.add(entry.tcgplayer_index);
-  }
-
-  let scanned = 0;
-  let total = 0;
-  for (const idx of watchlistIndices) {
-    if (idx >= products.length) continue;
-    const p = products[idx];
-    if (!p || p.site !== 'tcgplayer' || !p.price || !p.enabled) continue;
-    total++;
-    btn.textContent = `Scanning ${total} (${p.name.substring(0, 30)}...)`;
-    try {
-      await fetch(`/api/google-shopping/refresh/${idx}`, { method: 'POST' });
-      scanned++;
-      await loadShopping();
-    } catch(e) {
-      console.warn('Scan error:', e);
-    }
-  }
-
-  btn.disabled = false;
-  btn.textContent = 'Scan Now';
-  if (scanned === 0) alert('No watchlist products with TCGPlayer prices to scan. Add products to the Watchlist first.');
-}
-
-async function dismissShoppingResult(id) {
-  await fetch(`/api/google-shopping/${id}`, { method: 'DELETE' });
-  loadShopping();
 }
 
 // ── Research Agent ──────────────────────────────────────────────────

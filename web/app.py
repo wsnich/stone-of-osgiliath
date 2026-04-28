@@ -30,25 +30,23 @@ from web.state import app_state, deal_tracker, product_hub
 from monitors.tcgplayer_monitor import TCGPlayerMonitor
 from monitors.ebay_monitor import EbayMonitor
 from monitors.discord_monitor import DiscordMonitor
-from monitors.marketplace_monitor import (
-    parse_intent, is_noise, extract_prices, match_to_products, MarketplaceListing
-)
 from monitors.discord_gateway import DiscordGatewayMonitor
 import aiosqlite
 import db as price_db
 
-from monitors.google_shopping_monitor import GoogleShoppingMonitor
+from monitors.manapool_monitor import ManaPoolMonitor
 
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _tcgplayer = TCGPlayerMonitor()
 _ebay      = EbayMonitor()
 _discord   = DiscordMonitor()
 _discord_gw = DiscordGatewayMonitor()
-_google_shopping = GoogleShoppingMonitor()
+_manapool  = ManaPoolMonitor()
 
 # Reddit poller state
 _seen_reddit_ids: set[str] = set()
 _reddit_initialized: bool  = False
+_reddit_latest_utc: dict[str, float] = {}  # subreddit -> highest created_utc seen
 
 # ------------------------------------------------------------------
 # Config helpers
@@ -108,7 +106,7 @@ async def reddit_poll_loop():
     """
     import aiohttp
 
-    global _seen_reddit_ids, _reddit_initialized
+    global _seen_reddit_ids, _reddit_initialized, _reddit_latest_utc
 
     headers = {"User-Agent": "StoneOfOsgiliath/1.0 (deal monitoring)"}
 
@@ -141,13 +139,27 @@ async def reddit_poll_loop():
                                         p = child["data"]
                                         _seen_reddit_ids.add(p["id"])
                                         app_state.reddit_posts.append(_make_reddit_entry(p, subreddit, is_new=False))
+                                        utc = p.get("created_utc", 0)
+                                        if utc > _reddit_latest_utc.get(subreddit, 0):
+                                            _reddit_latest_utc[subreddit] = utc
                                     await app_state.log("info", f"Loaded {len(children)} posts from r/{subreddit}", "reddit")
                                 else:
                                     new_posts = []
+                                    latest_known = _reddit_latest_utc.get(subreddit, 0)
+                                    stale_count = 0
                                     for child in children:
                                         p = child["data"]
                                         if p["id"] not in _seen_reddit_ids:
+                                            post_utc = p.get("created_utc", 0)
+                                            # Skip posts more than 1 hour older than the latest
+                                            # known post — these are stale feed glitches
+                                            if latest_known and post_utc < latest_known - 3600:
+                                                _seen_reddit_ids.add(p["id"])
+                                                stale_count += 1
+                                                continue
                                             _seen_reddit_ids.add(p["id"])
+                                            if post_utc > latest_known:
+                                                _reddit_latest_utc[subreddit] = post_utc
                                             entry = _make_reddit_entry(p, subreddit, is_new=True)
                                             app_state.reddit_posts.appendleft(entry)
                                             new_posts.append(entry)
@@ -155,6 +167,8 @@ async def reddit_poll_loop():
                                     for entry in reversed(new_posts):
                                         await app_state.ws.broadcast({"type": "reddit_post", "data": entry})
 
+                                    if stale_count:
+                                        await app_state.log("warn", f"r/{subreddit}: skipped {stale_count} stale post(s) (feed glitch)", "reddit")
                                     if new_posts:
                                         await app_state.log("info", f"{len(new_posts)} new post(s) in r/{subreddit}", "reddit")
                             elif resp.status == 403:
@@ -329,7 +343,7 @@ async def discord_gateway_loop():
                             title_tokens = _tokenize(_normalize_name(title))
                             best_score = 0.0
                             for ps in app_state.product_statuses:
-                                if ps.site != "tcgplayer" or ps.price is None:
+                                if ps.site not in ("tcgplayer", "manapool") or ps.price is None:
                                     continue
                                 sc = _jaccard(title_tokens, _tokenize(_normalize_name(ps.name)))
                                 if sc > best_score and sc >= 0.35:
@@ -371,26 +385,6 @@ async def discord_gateway_loop():
 
             if deals_changed:
                 deal_tracker.save_to_disk()
-                from web.state import _normalize_name, _tokenize, _jaccard
-                hub_changed = False
-                for deal in deal_tracker.deals:
-                    if any(deal.id in e.deal_ids for e in product_hub.entries):
-                        continue
-                    best_entry = None
-                    best_score = 0.0
-                    for pe in product_hub.entries:
-                        entry_tokens = _tokenize(_normalize_name(pe.name))
-                        if not entry_tokens:
-                            continue
-                        score = _jaccard(deal.tokens, entry_tokens)
-                        if score > best_score:
-                            best_score = score
-                            best_entry = pe
-                    if best_entry and best_score >= 0.55:
-                        best_entry.deal_ids.append(deal.id)
-                        hub_changed = True
-                if hub_changed:
-                    product_hub.save_to_disk()
 
             # Save audit log + retailer intelligence
             for audit in audit_entries:
@@ -431,130 +425,6 @@ async def discord_gateway_loop():
         except Exception as e:
             print(f"  [Discord GW] Loop error: {e}")
             await app_state.log("warn", f"Discord gateway error: {e}", "discord")
-
-        await asyncio.sleep(3)
-
-
-async def marketplace_gateway_loop():
-    """Processes marketplace messages from the Gateway queue."""
-    await asyncio.sleep(10)
-
-    _seen_ids: set[str] = set()
-    _initialized = False
-
-    while True:
-        try:
-            config = load_config()
-            mp = config.get("marketplace", {})
-            if not mp.get("enabled") or not _discord_gw.connected:
-                await asyncio.sleep(5)
-                continue
-
-            raw_messages = await _discord_gw.drain_marketplace_queue()
-
-            if not _initialized:
-                for msg in raw_messages:
-                    _seen_ids.add(str(msg.get("id", "")))
-                _initialized = True
-                await asyncio.sleep(3)
-                continue
-
-            for msg in raw_messages:
-                mid = str(msg.get("id", ""))
-                if mid in _seen_ids:
-                    continue
-                _seen_ids.add(mid)
-
-                channel_id = str(msg.get("channel_id", ""))
-                content = msg.get("content", "")
-                author = msg.get("author", {})
-
-                if not content or is_noise(content):
-                    continue
-
-                sell_channels = set(str(c) for c in mp.get("sell_channels", []))
-                buy_channels = set(str(c) for c in mp.get("buy_channels", []))
-
-                if channel_id in sell_channels:
-                    intent = parse_intent(content) if parse_intent(content) != "WTB" else "WTS"
-                elif channel_id in buy_channels:
-                    intent = "WTB"
-                else:
-                    continue
-
-                items = extract_prices(content)
-                if not items:
-                    continue
-
-                # Match against tracked products
-                product_names = [
-                    {"index": i, "name": ps.name,
-                     "words": set(re.findall(r'\w{3,}', ps.name.lower()))}
-                    for i, ps in enumerate(app_state.product_statuses)
-                    if ps.site == "tcgplayer"
-                ]
-                matched = match_to_products(items, product_names)
-
-                guild_id = msg.get("guild_id", "")
-                jump_url = f"https://discord.com/channels/{guild_id}/{channel_id}/{mid}" if guild_id else ""
-
-                listing = MarketplaceListing(
-                    seller=author.get("username", "unknown") if isinstance(author, dict) else str(author),
-                    seller_id=author.get("id", "") if isinstance(author, dict) else "",
-                    intent=intent,
-                    raw_text=content[:300],
-                    items=items,
-                    msg_id=mid,
-                    channel_id=channel_id,
-                    timestamp=msg.get("timestamp", ""),
-                    jump_url=jump_url,
-                )
-
-                import json as _json
-                await price_db.record_marketplace_message(
-                    msg_id=mid, channel_id=channel_id,
-                    seller=listing.seller, seller_id=listing.seller_id,
-                    intent=intent, raw_text=content[:1000],
-                    items_json=_json.dumps(items),
-                    matched_json=_json.dumps(matched),
-                    timestamp=msg.get("timestamp", ""),
-                )
-
-                if matched:
-                    listing.items = matched
-                    await app_state.ws.broadcast({
-                        "type": "marketplace_listing",
-                        "data": listing.to_dict(),
-                    })
-
-                    # DM notification for below-market deals
-                    dm_user = config.get("discord", {}).get("dm_user_id")
-                    bot_token = config.get("discord", {}).get("bot_token", "")
-                    dm_token = f"Bot {bot_token}" if bot_token else ""
-                    if dm_user and dm_token and intent == "WTS":
-                        for item in matched:
-                            pi = item.get("product_index")
-                            if pi is not None and pi < len(app_state.product_statuses):
-                                ps = app_state.product_statuses[pi]
-                                if ps.price and item["price"] < ps.price * 0.85:
-                                    pct = ((item["price"] - ps.price) / ps.price) * 100
-                                    dm_msg = (
-                                        f"🏪 **Marketplace Deal**\n"
-                                        f"**{item.get('product_name', item['name'])}**\n"
-                                        f"Seller: @{listing.seller} — **${item['price']:.2f}** "
-                                        f"({pct:+.0f}% vs TCG ${ps.price:.2f})\n"
-                                        f"[Jump to message]({jump_url})"
-                                    )
-                                    await _discord.send_dm(dm_token, dm_user, dm_msg)
-
-                    await app_state.log("info",
-                        f"Marketplace: @{listing.seller} {intent} {len(matched)} matched item(s)",
-                        "marketplace")
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            log.debug(f"Marketplace gateway error: {e}")
 
         await asyncio.sleep(3)
 
@@ -634,7 +504,7 @@ async def monitor_loop():
             now_f = datetime.now()
             for i, ps in enumerate(app_state.product_statuses):
                 for cat in cats:
-                    if cat == "tcgplayer" and ps.site == "tcgplayer":
+                    if cat == "tcgplayer" and ps.site in ("tcgplayer", "manapool"):
                         next_check_at[i] = now_f
                     elif ps.tags.get("category") == cat:
                         next_check_at[i] = now_f
@@ -701,6 +571,10 @@ async def monitor_loop():
                                     low_price=ps.ebay_low, high_price=ps.ebay_high,
                                     sold_count=ps.ebay_sold_count, checked_at=ts,
                                 )
+                                await price_db.record_ebay_transactions(
+                                    product_name=ps.name, product_url=ps.url or ps.name,
+                                    sales=ps.ebay_sales, checked_at=ts,
+                                )
                                 await app_state.log("info",
                                     f"{ps.name} — eBay median ${ps.ebay_median:.2f} ({ps.ebay_sold_count} sold)" if ps.ebay_median else f"{ps.name} — eBay {len(sales)} listings (all ignored)", "ebay")
                             else:
@@ -720,6 +594,7 @@ async def monitor_loop():
 
                     monitors = {
                         "tcgplayer": _tcgplayer,
+                        "manapool":  _manapool,
                     }
                     mon = monitors.get(ps.site)
                     if not mon:
@@ -737,7 +612,7 @@ async def monitor_loop():
                         blocked=result.blocked, checked_at=ts,
                     )
 
-                    if ps.site == "tcgplayer" and (result.price is not None or result.low_price is not None):
+                    if ps.site in ("tcgplayer", "manapool") and (result.price is not None or result.low_price is not None):
                         # listings = number of sellers, quantity = total copies available
                         # listing_prices has per-listing qty data; tcg_quantity is listing count from DOM
                         lp = result.listing_prices or []
@@ -774,10 +649,10 @@ async def monitor_loop():
                             checked_at=ts, listing_prices_json=listing_json,
                         )
 
-                    # eBay sold search for all TCGPlayer items (singles + sealed)
+                    # eBay sold search for all TCGPlayer/ManaPool items (singles + sealed)
                     is_single = ps.tags.get("category") == "single"
                     is_comic  = ps.tags.get("category") == "comic"
-                    if ps.site == "tcgplayer":
+                    if ps.site in ("tcgplayer", "manapool"):
                         try:
                             ebay_result = await _ebay.check_single(cfg["products"][i], stealth_cfg)
                             if ebay_result.count > 0:
@@ -802,11 +677,33 @@ async def monitor_loop():
                                     low_price=ps.ebay_low, high_price=ps.ebay_high,
                                     sold_count=ps.ebay_sold_count, checked_at=ts,
                                 )
+                                await price_db.record_ebay_transactions(
+                                    product_name=ps.name, product_url=ps.url or ps.name,
+                                    sales=ps.ebay_sales, checked_at=ts,
+                                )
                                 await app_state.log("info",
                                     f"{ps.name} — eBay median ${ps.ebay_median:.2f} ({ps.ebay_sold_count} sold)" if ps.ebay_median else f"{ps.name} — eBay {ebay_result.count} listings (all ignored)",
                                     "ebay")
                         except Exception as e:
                             log.debug(f"eBay check error for {ps.name}: {e}")
+
+                    # ManaPool side-check for TCGPlayer items that have a manapool_url tag
+                    if ps.site == "tcgplayer" and ps.tags.get("manapool_url"):
+                        try:
+                            await _manapool._refresh_cache_if_stale()
+                            mp_market, mp_low, mp_qty, _ = _manapool._lookup(
+                                ps.tags["manapool_url"], ps.tags
+                            )
+                            await app_state.update_product(i,
+                                mp_market_price=mp_market,
+                                mp_low_price=mp_low,
+                                mp_quantity=mp_qty,
+                            )
+                            await app_state.log("info",
+                                f"{ps.name} — ManaPool market=${mp_market}, low=${mp_low}, qty={mp_qty}",
+                                "manapool")
+                        except Exception as e:
+                            await app_state.log("warn", f"ManaPool side-check error for {ps.name}: {e}", "manapool")
 
                     _SINGLES_IV  = 6 * 3600
                     _GRADED_IV_L = config.get("graded_interval_seconds", 7 * 86400)
@@ -911,6 +808,10 @@ async def lifespan(app: FastAPI):
         IMAGES_DIR = dd / "images"
         IMAGES_DIR.mkdir(exist_ok=True)
     await price_db.init_db()
+    # Configure ManaPool API token
+    mp_token = config.get("manapool_api_token", "")
+    if mp_token:
+        _manapool.set_token(mp_token)
     # Backfill retailer intelligence from existing discord_log
     backfilled = await price_db.backfill_retailer_sightings()
     if backfilled:
@@ -925,6 +826,10 @@ async def lifespan(app: FastAPI):
             _apply_ignore_patterns(ps)
             _recompute_ebay_aggregates(ps)
     app_state.save_to_disk()  # persist the corrected ignore flags
+    # Backfill individual eBay transactions from restored app_state (one-time)
+    backfilled_tx = await price_db.backfill_ebay_transactions(app_state.product_statuses)
+    if backfilled_tx:
+        print(f"  Backfilled {backfilled_tx} eBay transactions from app state")
     # Cache any remote images locally on startup
     for ps in app_state.product_statuses:
         if ps.image_url and ps.image_url.startswith("http"):
@@ -936,8 +841,6 @@ async def lifespan(app: FastAPI):
     research_task = asyncio.create_task(research_loop())
 
     discord_task = asyncio.create_task(discord_gateway_loop())
-    marketplace_task = asyncio.create_task(marketplace_gateway_loop())
-    shopping_task = asyncio.create_task(google_shopping_loop())
 
     app_state._monitor_task = task
     app_state._reddit_task  = reddit_task
@@ -946,7 +849,7 @@ async def lifespan(app: FastAPI):
     deal_tracker.save_to_disk()
     product_hub.save_to_disk()
     app_state.monitor_running = False
-    for t in (task, reddit_task, discord_task, marketplace_task, research_task, shopping_task):
+    for t in (task, reddit_task, discord_task, research_task):
         t.cancel()
         try:
             await t
@@ -1113,37 +1016,6 @@ async def add_product(body: ProductIn):
     await app_state.ws.broadcast(_broadcast_state())
     await app_state.log("info", f"Added product: {body.name}")
 
-    # Auto-create a Products hub entry for TCGPlayer items
-    if body.site == "tcgplayer":
-        from web.state import ProductEntry
-        new_index = len(config["products"]) - 1
-        tags = body.tags or {}
-        hub_tags = {}
-        if tags.get("set"):          hub_tags["set"] = tags["set"]
-        if tags.get("product_type"): hub_tags["product_type"] = tags["product_type"]
-        # Only create if no existing hub entry matches this name closely
-        from web.state import _normalize_name, _tokenize, _jaccard
-        new_tokens = _tokenize(_normalize_name(body.name))
-        already_exists = any(
-            _jaccard(new_tokens, _tokenize(_normalize_name(e.name))) >= 0.7
-            for e in product_hub.entries
-        )
-        if not already_exists:
-            entry = ProductEntry(
-                id=str(__import__("uuid").uuid4())[:8],
-                name=body.name,
-                tags=hub_tags,
-                tcgplayer_index=new_index,
-            )
-            # Copy image if available
-            if new_index < len(app_state.product_statuses):
-                img = app_state.product_statuses[new_index].image_url
-                if img:
-                    entry.image_url = img
-            product_hub.entries.insert(0, entry)
-            product_hub.save_to_disk()
-            await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-
     return {"status": "ok"}
 
 @app.put("/api/products/{index}")
@@ -1205,6 +1077,15 @@ async def ignore_sale(index: int, body: dict):
 
         # Recompute aggregates excluding ignored sales
         _recompute_ebay_aggregates(ps)
+
+        # Sync ignore flags to permanent DB
+        from datetime import datetime as _dt
+        _now = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        import asyncio as _asyncio
+        _asyncio.create_task(price_db.record_ebay_transactions(
+            product_name=ps.name, product_url=ps.url or ps.name,
+            sales=ps.ebay_sales, checked_at=_now,
+        ))
 
         await app_state.ws.broadcast({"type": "product_update", "data": ps.to_dict()})
         app_state.save_to_disk()
@@ -1360,18 +1241,31 @@ def _compute_market_low(listing_prices: list[dict], fallback_low: float | None) 
 
 
 def _apply_ignore_patterns(ps):
-    """Auto-ignore sales/live matching learned keywords OR previously ignored titles."""
+    """Auto-ignore sales/live matching learned keywords OR previously ignored titles.
+    Also hides sales that don't match all must_keywords (if any are set)."""
     keywords = ps.tags.get("ignore_keywords", [])
+    must_keywords = ps.tags.get("must_keywords", [])
     # Build both exact and normalized sets for matching
     ignored_exact = set(ps.ebay_ignored_titles)
     ignored_normalized = {_normalize_title(t) for t in ps.ebay_ignored_titles}
 
     for sale_list in (ps.ebay_sales or [], ps.ebay_live or []):
         for sale in sale_list:
+            title = sale.get("title", "")
+            title_lower = title.lower()
+
+            # Clear must_filtered flag so it can be re-evaluated
+            sale.pop("must_filtered", None)
+
+            # Must-contain check (runs even on already-ignored sales so the flag stays accurate)
+            if must_keywords and not all(kw in title_lower for kw in must_keywords):
+                sale["ignored"] = True
+                sale["must_filtered"] = True
+                continue
+
             if sale.get("ignored"):
                 continue
-            title = sale["title"]
-            title_lower = title.lower()
+
             # Exact match
             if title in ignored_exact:
                 sale["ignored"] = True
@@ -1386,22 +1280,49 @@ def _apply_ignore_patterns(ps):
                 sale["auto_ignored"] = True
 
 
+def _detect_price_outliers(prices: list[float]) -> set[float]:
+    """Return set of prices that are IQR outliers. Requires >=4 data points."""
+    import statistics
+    if len(prices) < 4:
+        return set()
+    sorted_p = sorted(prices)
+    n = len(sorted_p)
+    q1 = statistics.median(sorted_p[:n // 2])
+    q3 = statistics.median(sorted_p[(n + 1) // 2:])
+    iqr = q3 - q1
+    if iqr == 0:
+        return set()
+    lo = q1 - 1.5 * iqr
+    hi = q3 + 1.5 * iqr
+    return {p for p in prices if p < lo or p > hi}
+
+
 def _recompute_ebay_aggregates(ps):
-    """Recalculate median/avg/low/high/by_grade from non-ignored sales."""
+    """Recalculate median/avg/low/high/by_grade from non-ignored, non-outlier sales."""
     import statistics
     if not ps.ebay_sales:
         return
     active = [s for s in ps.ebay_sales if not s.get("ignored")]
     prices = [s["price"] for s in active if s.get("price")]
-    ps.ebay_median     = round(statistics.median(prices), 2) if prices else None
-    ps.ebay_avg        = round(statistics.mean(prices), 2) if prices else None
-    ps.ebay_low        = min(prices) if prices else None
-    ps.ebay_high       = max(prices) if prices else None
-    ps.ebay_sold_count = len(active)
+
+    # Detect and flag statistical outliers (e.g. fraudulent $4.99 sales)
+    outlier_prices = _detect_price_outliers(prices)
+    for s in active:
+        s["outlier"] = s.get("price") in outlier_prices
+
+    clean_prices = [p for p in prices if p not in outlier_prices]
+    use_prices = clean_prices if clean_prices else prices  # fallback if everything is an outlier
+
+    ps.ebay_median     = round(statistics.median(use_prices), 2) if use_prices else None
+    ps.ebay_avg        = round(statistics.mean(use_prices), 2) if use_prices else None
+    ps.ebay_low        = min(use_prices) if use_prices else None
+    ps.ebay_high       = max(use_prices) if use_prices else None
+    ps.ebay_sold_count = len([s for s in active if not s.get("outlier")])
     groups = {}
     for s in active:
-        g = s.get("grade", "Raw")
-        groups.setdefault(g, []).append(s["price"])
+        if not s.get("outlier"):
+            g = s.get("grade", "Raw")
+            groups.setdefault(g, []).append(s["price"])
     ps.ebay_by_grade = {
         g: {"count": len(p), "median": round(statistics.median(p), 2), "low": min(p), "high": max(p)}
         for g, p in sorted(groups.items())
@@ -1425,6 +1346,107 @@ async def toggle_retailer(body: dict):
     app_state.save_to_disk()
     await app_state.log("info", f"{'Enabled' if enabled else 'Disabled'} {count} {retailer} products", "system")
     return {"status": "ok", "count": count}
+
+@app.post("/api/products/{index}/add-keyword")
+async def add_keyword(index: int, body: dict):
+    """Manually add an ignore keyword and apply it to current sales."""
+    if index < 0 or index >= len(app_state.product_statuses):
+        raise HTTPException(status_code=404, detail="Product not found")
+    ps = app_state.product_statuses[index]
+    keyword = body.get("keyword", "").strip().lower()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="keyword required")
+
+    kw_list = ps.tags.get("ignore_keywords", [])
+    if keyword not in kw_list:
+        kw_list.append(keyword)
+        ps.tags["ignore_keywords"] = kw_list
+
+    if ps.ebay_sales:
+        _apply_ignore_patterns(ps)
+        _recompute_ebay_aggregates(ps)
+
+    cfg = load_config()
+    if index < len(cfg["products"]):
+        cfg["products"][index].setdefault("tags", {})["ignore_keywords"] = ps.tags.get("ignore_keywords", [])
+        save_config(cfg)
+
+    await app_state.ws.broadcast({"type": "product_update", "data": ps.to_dict()})
+    app_state.save_to_disk()
+    return {"status": "ok"}
+
+
+@app.post("/api/products/{index}/add-must-keyword")
+async def add_must_keyword(index: int, body: dict):
+    """Add a must-contain keyword — sales not matching it are hidden."""
+    if index < 0 or index >= len(app_state.product_statuses):
+        raise HTTPException(status_code=404, detail="Product not found")
+    ps = app_state.product_statuses[index]
+    keyword = body.get("keyword", "").strip().lower()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="keyword required")
+
+    kw_list = ps.tags.get("must_keywords", [])
+    if keyword not in kw_list:
+        kw_list.append(keyword)
+        ps.tags["must_keywords"] = kw_list
+
+    if ps.ebay_sales:
+        _apply_ignore_patterns(ps)
+        _recompute_ebay_aggregates(ps)
+
+    cfg = load_config()
+    if index < len(cfg["products"]):
+        cfg["products"][index].setdefault("tags", {})["must_keywords"] = ps.tags.get("must_keywords", [])
+        save_config(cfg)
+
+    await app_state.ws.broadcast({"type": "product_update", "data": ps.to_dict()})
+    app_state.save_to_disk()
+    return {"status": "ok"}
+
+
+@app.post("/api/products/{index}/remove-must-keyword")
+async def remove_must_keyword(index: int, body: dict):
+    """Remove a must-contain keyword and un-filter affected sales."""
+    if index < 0 or index >= len(app_state.product_statuses):
+        raise HTTPException(status_code=404, detail="Product not found")
+    ps = app_state.product_statuses[index]
+    keyword = body.get("keyword", "").strip().lower()
+
+    kw_list = ps.tags.get("must_keywords", [])
+    if keyword in kw_list:
+        kw_list.remove(keyword)
+        if kw_list:
+            ps.tags["must_keywords"] = kw_list
+        else:
+            ps.tags.pop("must_keywords", None)
+
+    # Un-filter sales that were hidden solely by this keyword
+    if ps.ebay_sales:
+        remaining = ps.tags.get("must_keywords", [])
+        for sale in ps.ebay_sales:
+            if sale.get("must_filtered"):
+                title_lower = sale.get("title", "").lower()
+                # Un-ignore only if it now passes all remaining must filters
+                if not remaining or all(kw in title_lower for kw in remaining):
+                    sale["ignored"] = False
+                    sale.pop("must_filtered", None)
+        _apply_ignore_patterns(ps)
+        _recompute_ebay_aggregates(ps)
+
+    cfg = load_config()
+    if index < len(cfg["products"]):
+        kw_remaining = ps.tags.get("must_keywords", [])
+        if kw_remaining:
+            cfg["products"][index].setdefault("tags", {})["must_keywords"] = kw_remaining
+        else:
+            cfg["products"][index].get("tags", {}).pop("must_keywords", None)
+        save_config(cfg)
+
+    await app_state.ws.broadcast({"type": "product_update", "data": ps.to_dict()})
+    app_state.save_to_disk()
+    return {"status": "ok"}
+
 
 @app.post("/api/products/{index}/remove-keyword")
 async def remove_keyword(index: int, body: dict):
@@ -1451,6 +1473,16 @@ async def remove_keyword(index: int, body: dict):
                 sale.pop("auto_ignored", None)
 
     _recompute_ebay_aggregates(ps)
+
+    cfg = load_config()
+    if index < len(cfg["products"]):
+        kw_remaining = ps.tags.get("ignore_keywords", [])
+        if kw_remaining:
+            cfg["products"][index].setdefault("tags", {})["ignore_keywords"] = kw_remaining
+        else:
+            cfg["products"][index].get("tags", {}).pop("ignore_keywords", None)
+        save_config(cfg)
+
     await app_state.ws.broadcast({"type": "product_update", "data": ps.to_dict()})
     app_state.save_to_disk()
     return {"status": "ok"}
@@ -1554,6 +1586,7 @@ async def get_discord_keywords():
         "ignored": ignored,
         "blocked_retailers": blocked_retailers,
         "min_price": dc.get("min_price", 0),
+        "require_price": dc.get("require_price", False),
         "active": [k for k in (manual + auto) if k not in disabled],
     }
 
@@ -1695,6 +1728,13 @@ async def set_discord_min_price(body: dict):
     save_config(config)
     return {"status": "ok"}
 
+@app.post("/api/discord/require-price")
+async def set_discord_require_price(body: dict):
+    config = load_config()
+    config.setdefault("discord", {})["require_price"] = bool(body.get("require_price", False))
+    save_config(config)
+    return {"status": "ok"}
+
 @app.post("/api/discord/ignore/remove")
 async def remove_discord_ignore_pattern(body: dict):
     """Remove a pattern from the Discord ignore list."""
@@ -1812,127 +1852,12 @@ async def clear_dismissed_deals():
     return {"status": "ok"}
 
 
-# ── Product Hub API ─────────────────────────────────────────────
-
-@app.get("/api/product-hub")
-async def get_product_hub():
-    return {"entries": [e.to_dict() for e in product_hub.entries]}
-
-@app.post("/api/product-hub")
-async def create_hub_entry(body: dict):
-    from web.state import ProductEntry, RetailerLink
-    entry = ProductEntry(
-        id=str(__import__("uuid").uuid4())[:8],
-        name=body.get("name", ""),
-        image_url=body.get("image_url"),
-        tags=body.get("tags", {}),
-        retailer_urls=[RetailerLink(**r) for r in body.get("retailer_urls", [])],
-        tcgplayer_index=body.get("tcgplayer_index"),
-        deal_ids=body.get("deal_ids", []),
-    )
-    product_hub.entries.insert(0, entry)
-    product_hub.save_to_disk()
-    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-    return {"status": "ok", "entry": entry.to_dict()}
-
-@app.put("/api/product-hub/{entry_id}")
-async def update_hub_entry(entry_id: str, body: dict):
-    from web.state import RetailerLink
-    e = product_hub.find_by_id(entry_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    if "name" in body:
-        e.name = body["name"]
-    if "tags" in body:
-        e.tags = body["tags"]
-    if "image_url" in body:
-        e.image_url = body["image_url"]
-    if "retailer_urls" in body:
-        e.retailer_urls = [RetailerLink(**r) for r in body["retailer_urls"]]
-    if "tcgplayer_index" in body:
-        e.tcgplayer_index = body["tcgplayer_index"]
-    if "deal_ids" in body:
-        e.deal_ids = body["deal_ids"]
-    product_hub.save_to_disk()
-    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-    return {"status": "ok", "entry": e.to_dict()}
-
-@app.delete("/api/product-hub/{entry_id}")
-async def delete_hub_entry(entry_id: str):
-    product_hub.entries = [e for e in product_hub.entries if e.id != entry_id]
-    product_hub.save_to_disk()
-    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-    return {"status": "ok"}
-
-@app.post("/api/product-hub/{entry_id}/retailer")
-async def add_hub_retailer(entry_id: str, body: dict):
-    from web.state import RetailerLink
-    e = product_hub.find_by_id(entry_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    e.retailer_urls.append(RetailerLink(retailer=body.get("retailer", ""), url=body.get("url", "")))
-    product_hub.save_to_disk()
-    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-    return {"status": "ok"}
-
-@app.delete("/api/product-hub/{entry_id}/retailer/{idx}")
-async def remove_hub_retailer(entry_id: str, idx: int):
-    e = product_hub.find_by_id(entry_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    if 0 <= idx < len(e.retailer_urls):
-        e.retailer_urls.pop(idx)
-    product_hub.save_to_disk()
-    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-    return {"status": "ok"}
-
-@app.post("/api/product-hub/{entry_id}/assign-deal")
-async def assign_deal_to_hub(entry_id: str, body: dict):
-    e = product_hub.find_by_id(entry_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    deal_id = body.get("deal_id", "")
-    if deal_id and deal_id not in e.deal_ids:
-        e.deal_ids.append(deal_id)
-    product_hub.save_to_disk()
-    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-    return {"status": "ok"}
-
-@app.post("/api/product-hub/{entry_id}/unassign-deal")
-async def unassign_deal_from_hub(entry_id: str, body: dict):
-    e = product_hub.find_by_id(entry_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    deal_id = body.get("deal_id", "")
-    if deal_id in e.deal_ids:
-        e.deal_ids.remove(deal_id)
-    product_hub.save_to_disk()
-    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-    return {"status": "ok"}
-
-@app.post("/api/product-hub/{entry_id}/link-tcgplayer")
-async def link_tcgplayer_to_hub(entry_id: str, body: dict):
-    e = product_hub.find_by_id(entry_id)
-    if not e:
-        raise HTTPException(status_code=404, detail="Entry not found")
-    idx = body.get("tcgplayer_index")
-    e.tcgplayer_index = idx
-    # Copy image from TCGPlayer item if hub entry doesn't have one
-    if idx is not None and not e.image_url and 0 <= idx < len(app_state.product_statuses):
-        tcg_img = app_state.product_statuses[idx].image_url
-        if tcg_img:
-            e.image_url = tcg_img
-    product_hub.save_to_disk()
-    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
-    return {"status": "ok"}
-
-
 @app.post("/api/refresh/{category}")
 async def refresh_category(category: str):
     """Force all items of a category (or site) to check on next cycle."""
     if category == "tcgplayer":
-        # Refresh all TCGPlayer items (singles + sealed)
-        count = sum(1 for ps in app_state.product_statuses if ps.site == "tcgplayer")
+        # Refresh all TCGPlayer/ManaPool items (singles + sealed)
+        count = sum(1 for ps in app_state.product_statuses if ps.site in ("tcgplayer", "manapool"))
     else:
         count = sum(1 for ps in app_state.product_statuses if ps.tags.get("category") == category)
     app_state.force_refresh_categories.add(category)
@@ -1958,19 +1883,12 @@ async def get_settings():
         "schedule_end":          schedule.get("end", "23:00"),
         "data_dir":              config.get("data_dir") or "",
         "graded_interval_hours": round(config.get("graded_interval_seconds", 7 * 86400) / 3600),
-        "marketplace_enabled":     config.get("marketplace", {}).get("enabled", False),
-        "marketplace_sell_channels": config.get("marketplace", {}).get("sell_channels", []),
-        "marketplace_buy_channels":  config.get("marketplace", {}).get("buy_channels", []),
         "reddit_subreddits":    config.get("reddit", {}).get("subreddits", ["sealedmtgdeals"]),
         "reddit_poll_interval": config.get("reddit", {}).get("poll_interval_seconds", 60),
         "bot_token":            config.get("discord", {}).get("bot_token") or "",
         "dm_user_id":           config.get("discord", {}).get("dm_user_id") or "",
         "discord_email":        config.get("discord", {}).get("email") or "",
         "discord_password":     config.get("discord", {}).get("password") or "",
-        "gs_enabled":            config.get("google_shopping", {}).get("enabled", False),
-        "gs_search_delay":       config.get("google_shopping", {}).get("search_delay_seconds", 300),
-        "gs_cycle_hours":        config.get("google_shopping", {}).get("cycle_interval_hours", 6),
-        "gs_alert_discount":     config.get("google_shopping", {}).get("alert_discount_pct", 15),
         "research_enabled":      research.get("enabled", False),
         "research_api_key":      research.get("api_key") or "",
         "research_interval_hours": research.get("interval_hours", 168),
@@ -2007,18 +1925,6 @@ async def update_settings(body: dict):
         config["data_dir"] = body["data_dir"].strip() or None
     if "graded_interval_hours" in body:
         config["graded_interval_seconds"] = max(1, int(body["graded_interval_hours"])) * 3600
-    if "marketplace_enabled" in body:
-        config.setdefault("marketplace", {})["enabled"] = bool(body["marketplace_enabled"])
-    if "marketplace_sell_channels" in body:
-        val = body["marketplace_sell_channels"]
-        if isinstance(val, str):
-            val = [s.strip() for s in val.split(",") if s.strip()]
-        config.setdefault("marketplace", {})["sell_channels"] = val
-    if "marketplace_buy_channels" in body:
-        val = body["marketplace_buy_channels"]
-        if isinstance(val, str):
-            val = [s.strip() for s in val.split(",") if s.strip()]
-        config.setdefault("marketplace", {})["buy_channels"] = val
     if "reddit_subreddits" in body:
         subs = body["reddit_subreddits"]
         if isinstance(subs, str):
@@ -2034,16 +1940,6 @@ async def update_settings(body: dict):
         config.setdefault("discord", {})["email"] = body["discord_email"].strip() or None
     if "discord_password" in body:
         config.setdefault("discord", {})["password"] = body["discord_password"].strip() or None
-    # Google Shopping settings
-    gc = config.setdefault("google_shopping", {})
-    if "gs_enabled" in body:
-        gc["enabled"] = bool(body["gs_enabled"])
-    if "gs_search_delay" in body:
-        gc["search_delay_seconds"] = max(180, int(body["gs_search_delay"]))
-    if "gs_cycle_hours" in body:
-        gc["cycle_interval_hours"] = max(1, min(48, int(body["gs_cycle_hours"])))
-    if "gs_alert_discount" in body:
-        gc["alert_discount_pct"] = max(5, min(50, int(body["gs_alert_discount"])))
     # Research agent settings
     rc = config.setdefault("research", {})
     if "research_enabled" in body:
@@ -2100,18 +1996,6 @@ async def get_stats(index: int):
     stats = await price_db.get_stats(ps.url)
     return {"product": ps.name, **stats}
 
-@app.get("/api/marketplace")
-async def get_marketplace(intent: str = "", limit: int = 50):
-    rows = await price_db.get_marketplace_listings(limit=limit, intent=intent)
-    for r in rows:
-        try:
-            r["items"] = json.loads(r.get("items_json") or "[]")
-            r["matched"] = json.loads(r.get("matched_json") or "[]")
-        except Exception:
-            r["items"] = []
-            r["matched"] = []
-    return {"listings": rows}
-
 @app.get("/api/retailer-overview")
 async def get_retailer_overview():
     """Return retailer intelligence overview data."""
@@ -2125,7 +2009,7 @@ async def get_tcg_trends():
     url_map = {t["url"]: t for t in trends}
     result = {}
     for ps in app_state.product_statuses:
-        if ps.site != "tcgplayer":
+        if ps.site not in ("tcgplayer", "manapool"):
             continue
         t = url_map.get(ps.url)
         if not t:
@@ -2329,218 +2213,6 @@ async def delete_portfolio_item(item_id: int):
 # Google Shopping
 # ------------------------------------------------------------------
 
-@app.get("/api/google-shopping")
-async def get_shopping_results(product_index: int = -1, major: bool = False, limit: int = 100):
-    idx = product_index if product_index >= 0 else None
-    return await price_db.get_google_shopping(product_index=idx, major=major, limit=limit)
-
-@app.get("/api/google-shopping/retailers")
-async def get_shopping_retailers():
-    return await price_db.get_google_shopping_retailers()
-
-@app.delete("/api/google-shopping/{result_id}")
-async def delete_shopping_result(result_id: int):
-    async with aiosqlite.connect(price_db.DB_PATH) as db:
-        await db.execute("DELETE FROM google_shopping_results WHERE id = ?", (result_id,))
-        await db.commit()
-    return {"status": "ok"}
-
-@app.post("/api/google-shopping/refresh/{index}")
-async def refresh_google_shopping(index: int):
-    if index < 0 or index >= len(app_state.product_statuses):
-        raise HTTPException(status_code=404, detail="Product not found")
-    ps = app_state.product_statuses[index]
-    config = load_config()
-    gs_cfg = config.get("google_shopping", {})
-    stealth_cfg = config.get("stealth", {})
-    product_cfg = config.get("products", [])[index] if index < len(config.get("products", [])) else {}
-
-    query = _google_shopping.build_query(product_cfg)
-    results = await _google_shopping.search(query, stealth_cfg, gs_cfg.get("excluded_domains", []))
-
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    tcg_market = ps.price
-    indie_results = []
-
-    # Clear old results for this product before recording new ones
-    async with aiosqlite.connect(price_db.DB_PATH) as _db:
-        await _db.execute("DELETE FROM google_shopping_results WHERE product_index = ?", (index,))
-        await _db.commit()
-    indie_results = await _record_shopping_results(results, ps, index, ts, tcg_market)
-    await app_state.update_product(index, google_shopping=indie_results, google_shopping_checked=ts)
-    return {"status": "ok", "results": len(indie_results)}
-
-
-async def _record_shopping_results(results, ps, index, ts, tcg_market, min_discount=0):
-    """Record Google Shopping results to DB and retailer intelligence. Returns indie results."""
-    from web.state import _normalize_name, _tokenize, _jaccard
-
-    indie_results = []
-    tags = ps.tags or {}
-    game = tags.get("game") or _detect_game_from_name(ps.name)
-
-    # Build product token set for title matching
-    product_name_lower = ps.name.lower()
-    product_tokens = _tokenize(_normalize_name(ps.name))
-
-    # Identify product type keywords that MUST appear in results
-    type_keywords = []
-    for kw in ["collector", "play", "draft", "bundle", "display", "case",
-               "set booster", "codex", "gift", "omega", "pack"]:
-        if kw in product_name_lower:
-            type_keywords.append(kw)
-
-    for r in results:
-        # Check if this result actually matches the product
-        result_title_lower = (r.title or "").lower()
-        result_tokens = _tokenize(_normalize_name(r.title))
-        similarity = _jaccard(product_tokens, result_tokens) if product_tokens and result_tokens else 0
-
-        # Require higher similarity AND matching product type keywords
-        is_match = similarity >= 0.40
-        if is_match and type_keywords:
-            # At least one type keyword must appear in the result title
-            has_type = any(kw in result_title_lower for kw in type_keywords)
-            if not has_type:
-                is_match = False
-
-        # Filter extreme price outliers (likely wrong product)
-        if is_match and tcg_market and r.total:
-            if r.total < tcg_market * 0.10 or r.total > tcg_market * 6:
-                is_match = False
-
-        discount = None
-        if tcg_market and r.total:
-            discount = round(((tcg_market - r.total) / tcg_market) * 100, 1)
-
-        # Only record to DB if it's a reasonable match
-        if is_match:
-            await price_db.record_google_shopping(
-                product_name=ps.name, product_index=index,
-                result_title=r.title, result_price=r.price,
-                shipping_price=r.shipping, total_price=r.total,
-                retailer=r.retailer, retailer_domain=r.domain,
-                product_url=r.url, image_url=r.image_url,
-                is_major=r.is_major, tcg_market=tcg_market,
-                discount_pct=discount, checked_at=ts,
-            )
-
-            # Only feed into retailer intelligence for matched products
-            retailer_name = _normalize_retailer(r.retailer) if r.retailer else r.domain
-            await price_db.record_retailer_sighting(
-                product_name=ps.name, game=game,
-                retailer=retailer_name,
-                price=r.total or r.price,
-                asin=None, product_url=r.url, checkout_url=None,
-                channel_id="google_shopping", msg_id=f"gs_{index}_{ts}",
-                timestamp=ts,
-            )
-
-            if not r.is_major and (not min_discount or (discount and discount >= min_discount)):
-                indie_results.append({
-                    "title": r.title, "price": r.price, "shipping": r.shipping,
-                    "total": r.total, "retailer": r.retailer, "domain": r.domain,
-                    "url": r.url, "image_url": r.image_url, "discount_pct": discount,
-                })
-
-    return indie_results
-
-
-def _detect_game_from_name(name: str) -> Optional[str]:
-    """Simple game detection from product name."""
-    n = name.lower()
-    if any(k in n for k in ('magic', 'mtg', 'strixhaven', 'secret lair', 'spider-man')):
-        return 'MTG'
-    if any(k in n for k in ('pokemon', 'pokémon', 'pikachu')):
-        return 'Pokemon'
-    if 'riftbound' in n:
-        return 'Riftbound'
-    if any(k in n for k in ('yu-gi-oh', 'yugioh')):
-        return 'Yu-Gi-Oh'
-    if 'lorcana' in n:
-        return 'Lorcana'
-    return None
-
-
-async def google_shopping_loop():
-    """Background loop — searches Google Shopping for watchlist products."""
-    await asyncio.sleep(30)  # Let app start
-
-    while True:
-        try:
-            config = load_config()
-            gs_cfg = config.get("google_shopping", {})
-            if not gs_cfg.get("enabled", False):
-                await asyncio.sleep(300)
-                continue
-
-            stealth_cfg = config.get("stealth", {})
-            search_delay = max(180, gs_cfg.get("search_delay_seconds", 300))
-            min_discount = gs_cfg.get("min_discount_pct", 10)
-            alert_discount = gs_cfg.get("alert_discount_pct", 15)
-            excluded = gs_cfg.get("excluded_domains", [])
-
-            # Build list of products to search (only watchlist items with TCGPlayer prices)
-            products_cfg = config.get("products", [])
-            watchlist_indices = set()
-            for entry in product_hub.entries:
-                if entry.tcgplayer_index is not None:
-                    watchlist_indices.add(entry.tcgplayer_index)
-
-            searchable = []
-            for i, ps in enumerate(app_state.product_statuses):
-                if i in watchlist_indices and ps.site == "tcgplayer" and ps.price and ps.enabled:
-                    searchable.append((i, ps, products_cfg[i] if i < len(products_cfg) else {}))
-
-            if not searchable:
-                await asyncio.sleep(3600)
-                continue
-
-            # Sort by staleness (least recently checked first)
-            searchable.sort(key=lambda x: x[1].google_shopping_checked or "")
-
-            await app_state.log("info", f"Google Shopping: scanning {len(searchable)} products", "shopping")
-
-            for i, ps, pcfg in searchable:
-                query = _google_shopping.build_query(pcfg)
-                results = await _google_shopping.search(query, stealth_cfg, excluded)
-
-                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                tcg_market = ps.price
-                # Clear old results for this product
-                async with aiosqlite.connect(price_db.DB_PATH) as _db:
-                    await _db.execute("DELETE FROM google_shopping_results WHERE product_index = ?", (i,))
-                    await _db.commit()
-                indie_results = await _record_shopping_results(
-                    results, ps, i, ts, tcg_market, min_discount)
-                await app_state.update_product(i, google_shopping=indie_results, google_shopping_checked=ts)
-
-                if indie_results:
-                    await app_state.log("info",
-                        f"{ps.name} — {len(indie_results)} indie deal(s) on Google Shopping",
-                        "shopping")
-
-                    # DM alerts disabled until Google Shopping accuracy improves
-                    if False:
-                                await _discord.send_dm(dm_token, dm_user, dm_msg)
-
-                # Rate limit: wait between searches
-                jitter = random.randint(0, int(search_delay * 0.2))
-                await asyncio.sleep(search_delay + jitter)
-
-            # Cycle complete — wait before next cycle
-            cycle_hours = gs_cfg.get("cycle_interval_hours", 6)
-            await app_state.log("info",
-                f"Google Shopping: cycle complete, next in {cycle_hours}h", "shopping")
-            await asyncio.sleep(cycle_hours * 3600)
-
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            log.warning(f"Google Shopping loop error: {e}")
-            await asyncio.sleep(3600)
-
-
 # ------------------------------------------------------------------
 # Research Agent
 # ------------------------------------------------------------------
@@ -2693,3 +2365,119 @@ async def research_loop():
         except Exception as e:
             print(f"  [Research] Loop error: {e}")
             await asyncio.sleep(3600)
+
+
+# ------------------------------------------------------------------
+# Product Hub (Watchlist)
+# ------------------------------------------------------------------
+
+@app.get("/api/product-hub")
+async def get_product_hub():
+    return [e.to_dict() for e in product_hub.entries]
+
+
+@app.post("/api/product-hub")
+async def add_hub_entry(body: dict):
+    import uuid
+    from web.state import ProductEntry
+    entry = ProductEntry(
+        id=str(uuid.uuid4()),
+        name=body.get("name", "").strip(),
+        image_url=body.get("image_url") or None,
+        tags=body.get("tags", {}),
+    )
+    product_hub.entries.append(entry)
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.put("/api/product-hub/{entry_id}")
+async def update_hub_entry(entry_id: str, body: dict):
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if "name" in body:
+        entry.name = body["name"].strip()
+    if "image_url" in body:
+        entry.image_url = body["image_url"] or None
+    if "tags" in body:
+        entry.tags = body["tags"]
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.delete("/api/product-hub/{entry_id}")
+async def delete_hub_entry(entry_id: str):
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    product_hub.entries.remove(entry)
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return {"status": "ok"}
+
+
+@app.post("/api/product-hub/{entry_id}/retailer")
+async def add_hub_retailer(entry_id: str, body: dict):
+    from web.state import RetailerLink
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    retailer = body.get("retailer", "").strip()
+    url = body.get("url", "").strip()
+    if not retailer or not url:
+        raise HTTPException(status_code=400, detail="retailer and url required")
+    entry.retailer_urls = [r for r in entry.retailer_urls if r.retailer.lower() != retailer.lower()]
+    entry.retailer_urls.append(RetailerLink(retailer=retailer, url=url))
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.delete("/api/product-hub/{entry_id}/retailer/{retailer}")
+async def remove_hub_retailer(entry_id: str, retailer: str):
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    entry.retailer_urls = [r for r in entry.retailer_urls if r.retailer.lower() != retailer.lower()]
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/link-tcgplayer")
+async def link_hub_tcgplayer(entry_id: str, body: dict):
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    entry.tcgplayer_index = body.get("index")
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/assign-deal")
+async def assign_hub_deal(entry_id: str, body: dict):
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    deal_id = body.get("deal_id", "")
+    if deal_id and deal_id not in entry.deal_ids:
+        entry.deal_ids.append(deal_id)
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/unassign-deal")
+async def unassign_hub_deal(entry_id: str, body: dict):
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    deal_id = body.get("deal_id", "")
+    entry.deal_ids = [d for d in entry.deal_ids if d != deal_id]
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
