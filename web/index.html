@@ -1662,8 +1662,48 @@ select.form-input option { background: var(--surface2); }
   </div>
   <button class="btn btn-stop btn-sm" id="btn-stop"  onclick="controlMonitor('stop')" style="display:none">■ Stop</button>
   <button class="btn btn-start btn-sm" id="btn-start" onclick="controlMonitor('start')" style="display:none">▶ Start</button>
-  <button class="btn btn-ghost btn-sm" onclick="openSettingsModal()" title="Settings" style="font-size:14px;padding:4px 8px;margin-left:6px">&#9881;</button>
+  <button class="btn btn-ghost btn-sm" onclick="openRefreshInfoModal()" title="How refresh timing works" style="font-size:13px;padding:4px 8px;line-height:1">&#9432;</button>
+  <button class="btn btn-ghost btn-sm" onclick="openSettingsModal()" title="Settings" style="font-size:14px;padding:4px 8px;margin-left:2px">&#9881;</button>
 </header>
+
+<!-- ── Refresh info modal ────────────────────────────────────── -->
+<div class="modal-backdrop" id="refresh-info-modal" onclick="if(event.target===this)closeRefreshInfoModal()" style="display:none">
+  <div class="modal" style="max-width:460px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div class="modal-title" style="margin-bottom:0">How Refresh Timing Works</div>
+      <button class="btn btn-ghost btn-sm" onclick="closeRefreshInfoModal()">&#10005;</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;line-height:1.6;color:var(--text)">
+
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:baseline">
+        <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Sealed / Other</span>
+        <span>Uses the global <em>Check Interval</em> from Settings (default 5 min). Each product is offset so checks spread out instead of piling up.</span>
+
+        <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Singles</span>
+        <span>Fixed at <strong>6 hours</strong> regardless of the global interval — singles change slowly so frequent checks are wasteful.</span>
+
+        <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Graded / Comics</span>
+        <span>Uses the <em>Graded Interval</em> from Settings (default 7 days).</span>
+
+        <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Per-product override</span>
+        <span>Any product can have its own interval set when you add or edit it. This overrides the global and type-based intervals.</span>
+      </div>
+
+      <div style="border-top:1px solid var(--border);padding-top:10px;color:var(--muted);font-size:11px">
+        <strong style="color:var(--text)">Jitter</strong> — each interval gets a small random offset (±<span id="rinfo-jitter">20</span>%) so checks don't all fire at once. A 5-min interval with 20% jitter fires somewhere between 4–6 min.
+      </div>
+
+      <div style="color:var(--muted);font-size:11px">
+        <strong style="color:var(--text)">Restart behaviour</strong> — on startup, each product's next check is calculated from its last-checked time plus the interval, so recently-checked products aren't immediately re-checked.
+      </div>
+
+      <div style="color:var(--muted);font-size:11px">
+        <strong style="color:var(--text)">Countdown pill</strong> — the "next check" timer in the header shows when the earliest queued check will fire across all active products.
+      </div>
+
+    </div>
+  </div>
+</div>
 
 <!-- ── Settings modal ───────────────────────────────────────── -->
 <div class="modal-backdrop" id="settings-modal" onclick="if(event.target===this)closeSettingsModal()" style="display:none">
@@ -3161,6 +3201,23 @@ async function openSettingsModal() {
 function closeSettingsModal() {
   document.getElementById('settings-modal').style.display = 'none';
   document.getElementById('settings-modal').classList.remove('open');
+}
+
+async function openRefreshInfoModal() {
+  // Pull current jitter from settings so the description is accurate
+  try {
+    const res = await fetch('/api/settings');
+    if (res.ok) {
+      const s = await res.json();
+      const jitter = s.jitter_pct ?? 20;
+      document.getElementById('rinfo-jitter').textContent = jitter;
+    }
+  } catch {}
+  document.getElementById('refresh-info-modal').style.display = 'flex';
+}
+
+function closeRefreshInfoModal() {
+  document.getElementById('refresh-info-modal').style.display = 'none';
 }
 
 async function testDiscordDM() {
