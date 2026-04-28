@@ -1666,42 +1666,134 @@ select.form-input option { background: var(--surface2); }
   <button class="btn btn-ghost btn-sm" onclick="openSettingsModal()" title="Settings" style="font-size:14px;padding:4px 8px;margin-left:2px">&#9881;</button>
 </header>
 
-<!-- ── Refresh info modal ────────────────────────────────────── -->
+<!-- ── Info modal (Getting Started + Refresh Timing) ─────────── -->
 <div class="modal-backdrop" id="refresh-info-modal" onclick="if(event.target===this)closeRefreshInfoModal()" style="display:none">
-  <div class="modal" style="max-width:460px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-      <div class="modal-title" style="margin-bottom:0">How Refresh Timing Works</div>
+  <div class="modal" style="max-width:500px;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-shrink:0">
+      <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:6px;overflow:hidden">
+        <button id="info-tab-start"  onclick="switchInfoTab('start')"  style="border:none;background:var(--accent);color:#000;font-size:11px;font-weight:600;padding:5px 14px;cursor:pointer">Getting Started</button>
+        <button id="info-tab-timing" onclick="switchInfoTab('timing')" style="border:none;background:transparent;color:var(--muted);font-size:11px;font-weight:600;padding:5px 14px;cursor:pointer">Refresh Timing</button>
+      </div>
       <button class="btn btn-ghost btn-sm" onclick="closeRefreshInfoModal()">&#10005;</button>
     </div>
-    <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;line-height:1.6;color:var(--text)">
 
-      <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:baseline">
-        <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Sealed / Other</span>
-        <span>Uses the global <em>Check Interval</em> from Settings (default 5 min). Each product is offset so checks spread out instead of piling up.</span>
+    <div style="overflow-y:auto;flex:1">
 
-        <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Singles</span>
-        <span>Fixed at <strong>6 hours</strong> regardless of the global interval — singles change slowly so frequent checks are wasteful.</span>
+      <!-- ── Getting Started tab ── -->
+      <div id="info-panel-start" style="display:flex;flex-direction:column;gap:14px;font-size:12px;line-height:1.65;color:var(--text)">
 
-        <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Graded / Comics</span>
-        <span>Uses the <em>Graded Interval</em> from Settings (default 7 days).</span>
+        <div style="background:var(--surface3);border-radius:6px;padding:10px 12px;font-size:11px;color:var(--muted)">
+          Follow these steps in order. Each one unlocks the next feature. You can always change settings later via the <strong style="color:var(--text)">&#9881; gear icon</strong>.
+        </div>
 
-        <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Per-product override</span>
-        <span>Any product can have its own interval set when you add or edit it. This overrides the global and type-based intervals.</span>
-      </div>
+        <!-- Step 1 -->
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="background:var(--accent);color:#000;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">1</span>
+            <strong>Start the app &amp; open the browser</strong>
+          </div>
+          <div style="color:var(--muted);font-size:11px;padding-left:28px">
+            Run <code style="background:var(--surface3);padding:1px 5px;border-radius:3px">start.bat</code> (Windows) or <code style="background:var(--surface3);padding:1px 5px;border-radius:3px">python main.py</code>. A Chromium window will open — leave it running in the background.
+          </div>
+        </div>
 
-      <div style="border-top:1px solid var(--border);padding-top:10px;color:var(--muted);font-size:11px">
-        <strong style="color:var(--text)">Jitter</strong> — each interval gets a small random offset (±<span id="rinfo-jitter">20</span>%) so checks don't all fire at once. A 5-min interval with 20% jitter fires somewhere between 4–6 min.
-      </div>
+        <!-- Step 2 -->
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="background:var(--accent);color:#000;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">2</span>
+            <strong>Log in to Discord in the browser window</strong>
+          </div>
+          <div style="color:var(--muted);font-size:11px;padding-left:28px">
+            The Chromium window will show Discord's login page. Sign in with your email, password, and 2FA. You only need to do this once — the session is saved.
+          </div>
+        </div>
 
-      <div style="color:var(--muted);font-size:11px">
-        <strong style="color:var(--text)">Restart behaviour</strong> — on startup, each product's next check is calculated from its last-checked time plus the interval, so recently-checked products aren't immediately re-checked.
-      </div>
+        <!-- Step 3 -->
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="background:var(--accent);color:#000;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">3</span>
+            <strong>Add Discord channels to monitor</strong>
+          </div>
+          <div style="color:var(--muted);font-size:11px;padding-left:28px">
+            Open <strong style="color:var(--text)">&#9881; Settings → Discord</strong> and paste your email/password so the app can reconnect automatically. Then scroll down to the Discord feed panel and click <em>Options → add a channel URL</em>.<br><br>
+            To get a channel URL: right-click any channel in Discord → <em>Copy Link</em>. Paste the full URL.
+          </div>
+        </div>
 
-      <div style="color:var(--muted);font-size:11px">
-        <strong style="color:var(--text)">Countdown pill</strong> — the "next check" timer in the header shows when the earliest queued check will fire across all active products.
-      </div>
+        <!-- Step 4 -->
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="background:var(--accent);color:#000;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">4</span>
+            <strong>Add products to the TCGPlayer tab</strong>
+          </div>
+          <div style="color:var(--muted);font-size:11px;padding-left:28px">
+            Click the <strong style="color:var(--text)">TCGPlayer</strong> tab, then <strong style="color:var(--text)">+ Add TCGPlayer</strong>. Paste a TCGPlayer product URL and give it a name. The app will start tracking its price, listings, and sold data.<br><br>
+            For foil singles, add a ManaPool URL in the product form to get live ManaPool pricing alongside TCGPlayer.
+          </div>
+        </div>
 
-    </div>
+        <!-- Step 5 -->
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="background:var(--accent);color:#000;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">5</span>
+            <strong>Set up Discord DM notifications <span style="color:var(--muted);font-weight:400">(optional)</span></strong>
+          </div>
+          <div style="color:var(--muted);font-size:11px;padding-left:28px">
+            Create a bot at <em>discord.com/developers</em> → Applications → Bot → Reset Token. Paste the token in <strong style="color:var(--text)">Settings → Discord → Bot Token</strong> and your User ID in the field below it. The app will DM you when a deal is detected.
+          </div>
+        </div>
+
+        <!-- Step 6 -->
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="background:var(--accent);color:#000;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px">6</span>
+            <strong>Start the monitor</strong>
+          </div>
+          <div style="color:var(--muted);font-size:11px;padding-left:28px">
+            Click <strong style="color:var(--text)">▶ Start</strong> in the header. The status dot will turn green and the app will begin checking prices and watching Discord channels. That's it.
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:10px;font-size:11px;color:var(--muted)">
+          <strong style="color:var(--text)">Tip:</strong> The <strong style="color:var(--text)">Deals</strong> tab auto-aggregates Discord alerts matching your keywords. The <strong style="color:var(--text)">Intelligence</strong> tab builds a retailer map automatically from those same messages — no setup needed.
+        </div>
+
+      </div><!-- /info-panel-start -->
+
+      <!-- ── Refresh Timing tab ── -->
+      <div id="info-panel-timing" style="display:none;flex-direction:column;gap:10px;font-size:12px;line-height:1.6;color:var(--text)">
+
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:baseline">
+          <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Sealed / Other</span>
+          <span>Uses the global <em>Check Interval</em> from Settings (default 5 min). Each product is offset so checks spread out instead of piling up.</span>
+
+          <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Singles</span>
+          <span>Fixed at <strong>6 hours</strong> regardless of the global interval — singles change slowly so frequent checks are wasteful.</span>
+
+          <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Graded / Comics</span>
+          <span>Uses the <em>Graded Interval</em> from Settings (default 7 days).</span>
+
+          <span style="color:var(--yellow);font-weight:600;white-space:nowrap">Per-product override</span>
+          <span>Any product can have its own interval set when you add or edit it. This overrides the global and type-based intervals.</span>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:10px;color:var(--muted);font-size:11px">
+          <strong style="color:var(--text)">Jitter</strong> — each interval gets a small random offset (±<span id="rinfo-jitter">20</span>%) so checks don't all fire at once. A 5-min interval with 20% jitter fires somewhere between 4–6 min.
+        </div>
+
+        <div style="color:var(--muted);font-size:11px">
+          <strong style="color:var(--text)">Restart behaviour</strong> — on startup, each product's next check is calculated from its last-checked time plus the interval, so recently-checked products aren't immediately re-checked.
+        </div>
+
+        <div style="color:var(--muted);font-size:11px">
+          <strong style="color:var(--text)">Countdown pill</strong> — the "next check" timer in the header shows when the earliest queued check will fire across all active products.
+        </div>
+
+      </div><!-- /info-panel-timing -->
+
+    </div><!-- /scroll -->
   </div>
 </div>
 
@@ -3203,21 +3295,34 @@ function closeSettingsModal() {
   document.getElementById('settings-modal').classList.remove('open');
 }
 
-async function openRefreshInfoModal() {
+async function openRefreshInfoModal(tab = 'start') {
   // Pull current jitter from settings so the description is accurate
   try {
     const res = await fetch('/api/settings');
     if (res.ok) {
       const s = await res.json();
-      const jitter = s.jitter_pct ?? 20;
-      document.getElementById('rinfo-jitter').textContent = jitter;
+      document.getElementById('rinfo-jitter').textContent = s.jitter_pct ?? 20;
     }
   } catch {}
   document.getElementById('refresh-info-modal').style.display = 'flex';
+  switchInfoTab(tab);
 }
 
 function closeRefreshInfoModal() {
   document.getElementById('refresh-info-modal').style.display = 'none';
+}
+
+function switchInfoTab(tab) {
+  const tabs   = ['start', 'timing'];
+  const accent = 'var(--accent)';
+  tabs.forEach(t => {
+    const btn   = document.getElementById(`info-tab-${t}`);
+    const panel = document.getElementById(`info-panel-${t}`);
+    const active = t === tab;
+    btn.style.background = active ? accent : 'transparent';
+    btn.style.color      = active ? '#000' : 'var(--muted)';
+    panel.style.display  = active ? 'flex' : 'none';
+  });
 }
 
 async function testDiscordDM() {
