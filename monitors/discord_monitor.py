@@ -170,7 +170,7 @@ class DiscordMonitor:
         min_price = dc.get("min_price", 0)
         if min_price and price is not None and price < min_price:
             return None, {**log_entry, "action": "filtered", "reason": f"price ${price:.2f} < min ${min_price}"}
-        if min_price and price is None:
+        if min_price and price is None and dc.get("require_price", False):
             return None, {**log_entry, "action": "filtered", "reason": "no price detected"}
 
         # Passed all filters

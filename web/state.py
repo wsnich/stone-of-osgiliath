@@ -49,6 +49,10 @@ class ProductStatus:
     tcg_low_price: Optional[float] = None
     tcg_market_low: Optional[float] = None  # 5th percentile from listing distribution
     tcg_quantity: Optional[int] = None
+    # Mana Pool data (fetched alongside TCGPlayer when manapool_url is set in tags)
+    mp_market_price: Optional[float] = None
+    mp_low_price: Optional[float] = None
+    mp_quantity: Optional[int] = None
     # Listing prices (for histogram)
     listing_prices: Optional[list] = None
     # TCGPlayer recent sales
@@ -708,6 +712,9 @@ class AppState:
             ps.tcg_low_price      = s.get("tcg_low_price")
             ps.tcg_market_low     = s.get("tcg_market_low")
             ps.tcg_quantity       = s.get("tcg_quantity")
+            ps.mp_market_price    = s.get("mp_market_price")
+            ps.mp_low_price       = s.get("mp_low_price")
+            ps.mp_quantity        = s.get("mp_quantity")
             ps.tcg_sales          = s.get("tcg_sales")
             ps.tcg_price_history  = s.get("tcg_price_history")
             ps.listing_prices     = s.get("listing_prices")

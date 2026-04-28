@@ -87,6 +87,25 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_ebay_url_time ON ebay_sold(url, checked_at)")
 
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS ebay_transactions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_name TEXT    NOT NULL,
+                product_url  TEXT    NOT NULL,
+                title        TEXT    NOT NULL,
+                price        REAL    NOT NULL,
+                condition    TEXT,
+                grade        TEXT,
+                best_offer   INTEGER NOT NULL DEFAULT 0,
+                sold_date    TEXT,
+                ignored      INTEGER NOT NULL DEFAULT 0,
+                first_seen   TEXT    NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_et_product ON ebay_transactions(product_url)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_et_ignored ON ebay_transactions(ignored)")
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_et_dedup ON ebay_transactions(product_url, title, sold_date)")
+
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS discord_log (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 msg_id       TEXT    NOT NULL,
@@ -588,6 +607,86 @@ async def record_ebay_sold(
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (product_name, url, median_price, avg_price, low_price, high_price, sold_count, checked_at),
         )
+        await db.commit()
+
+
+async def backfill_ebay_transactions(products: list) -> int:
+    """
+    One-time seed of ebay_transactions from in-memory product state.
+    Only runs if the table is empty. Returns the number of rows inserted.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM ebay_transactions") as cur:
+            existing = (await cur.fetchone())[0]
+        if existing > 0:
+            return 0  # already seeded
+
+        from datetime import datetime as _dt
+        now = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        count = 0
+        for ps in products:
+            sales = getattr(ps, "ebay_sales", None) or []
+            if not sales:
+                continue
+            product_url = getattr(ps, "url", None) or getattr(ps, "name", "")
+            product_name = getattr(ps, "name", "")
+            for sale in sales:
+                title     = (sale.get("title") or "")[:200]
+                price     = sale.get("price")
+                condition = sale.get("condition") or ""
+                grade     = sale.get("grade") or ""
+                best_offer = 1 if sale.get("bestOffer") else 0
+                sold_date  = sale.get("soldDate") or ""
+                ignored    = 1 if sale.get("ignored") else 0
+                if not title or not price:
+                    continue
+                await db.execute(
+                    """INSERT OR IGNORE INTO ebay_transactions
+                       (product_name, product_url, title, price, condition, grade,
+                        best_offer, sold_date, ignored, first_seen)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (product_name, product_url, title, price, condition, grade,
+                     best_offer, sold_date, ignored, now),
+                )
+                count += 1
+        await db.commit()
+    return count
+
+
+async def record_ebay_transactions(
+    product_name: str,
+    product_url: str,
+    sales: list[dict],
+    checked_at: str,
+) -> None:
+    """
+    Upsert individual eBay sale transactions into ebay_transactions.
+    Deduplicates on (product_url, title, sold_date) so re-scrapes don't
+    create duplicate rows — but updates the ignored flag if it changed.
+    """
+    if not sales:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        for sale in sales:
+            title     = (sale.get("title") or "")[:200]
+            price     = sale.get("price")
+            condition = sale.get("condition") or ""
+            grade     = sale.get("grade") or ""
+            best_offer = 1 if sale.get("bestOffer") else 0
+            sold_date  = sale.get("soldDate") or ""
+            ignored    = 1 if sale.get("ignored") else 0
+            if not title or not price:
+                continue
+            await db.execute(
+                """INSERT INTO ebay_transactions
+                   (product_name, product_url, title, price, condition, grade,
+                    best_offer, sold_date, ignored, first_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(product_url, title, sold_date)
+                   DO UPDATE SET ignored = excluded.ignored""",
+                (product_name, product_url, title, price, condition, grade,
+                 best_offer, sold_date, ignored, checked_at),
+            )
         await db.commit()
 
 # ---------------------------------------------------------------------------
