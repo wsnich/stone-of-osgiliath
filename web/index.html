@@ -2624,6 +2624,12 @@ select.form-input option { background: var(--surface2); }
         onkeydown="if(event.key==='Enter')addMustKeyword()">
       <button class="btn btn-start btn-sm" style="font-size:11px;white-space:nowrap" onclick="addMustKeyword()">+ Must</button>
     </div>
+    <div style="padding:6px 12px 6px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">
+      <input id="sales-search" type="text" placeholder="Filter by title or price…"
+        style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;color:var(--text);outline:none"
+        oninput="filterSalesRows(this.value)">
+      <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px;color:var(--muted)" onclick="document.getElementById('sales-search').value='';filterSalesRows('')">✕</button>
+    </div>
     <div class="sales-modal-list" id="sales-modal-list"></div>
   </div>
 </div>
@@ -5667,6 +5673,10 @@ function openSalesModal(i) {
   const p = products[i];
   if (!p || !p.ebay_sales) return;
 
+  // Clear search filter each time modal opens
+  const searchEl = document.getElementById('sales-search');
+  if (searchEl) searchEl.value = '';
+
   document.getElementById('sales-modal-title').textContent = p.name;
 
   // Stats
@@ -5784,6 +5794,44 @@ function renderSalesModalList(p, i) {
   }
 
   list.innerHTML = html;
+  filterSalesRows(document.getElementById('sales-search').value);
+}
+
+function filterSalesRows(query) {
+  const q = query.trim().toLowerCase();
+  const list = document.getElementById('sales-modal-list');
+  if (!list) return;
+
+  // Collect all top-level children: grade headers (divs without class) and rows
+  const children = Array.from(list.children);
+  let currentHeader = null;
+  let visibleInGroup = 0;
+
+  for (const el of children) {
+    const isRow = el.classList.contains('sales-modal-row');
+    if (!isRow) {
+      // It's a grade section header — finalize visibility of previous group
+      if (currentHeader) currentHeader.style.display = visibleInGroup ? '' : 'none';
+      currentHeader = el;
+      visibleInGroup = 0;
+      continue;
+    }
+    if (!q) {
+      el.style.display = '';
+      visibleInGroup++;
+      continue;
+    }
+    // Match against price text and title text
+    const priceEl = el.querySelector('.sale-price');
+    const titleEl = el.querySelector('.sale-title');
+    const priceText  = priceEl  ? priceEl.textContent  : '';
+    const titleText  = titleEl  ? titleEl.textContent  : '';
+    const matches = (priceText + ' ' + titleText).toLowerCase().includes(q);
+    el.style.display = matches ? '' : 'none';
+    if (matches) visibleInGroup++;
+  }
+  // Finalize last group header
+  if (currentHeader) currentHeader.style.display = visibleInGroup ? '' : 'none';
 }
 
 async function removeIgnoreKeyword(productIndex, keyword) {
