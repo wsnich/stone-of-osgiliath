@@ -2507,3 +2507,69 @@ async def unassign_hub_deal(entry_id: str, body: dict):
     product_hub.save_to_disk()
     await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
     return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/exclude-deal")
+async def exclude_hub_deal(entry_id: str, body: dict):
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    deal_id = body.get("deal_id", "")
+    if deal_id and deal_id not in entry.excluded_deal_ids:
+        entry.excluded_deal_ids.append(deal_id)
+        # Also remove from pinned list if it was pinned
+        entry.deal_ids = [d for d in entry.deal_ids if d != deal_id]
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/unexclude-deal")
+async def unexclude_hub_deal(entry_id: str, body: dict):
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    deal_id = body.get("deal_id", "")
+    entry.excluded_deal_ids = [d for d in entry.excluded_deal_ids if d != deal_id]
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/ignore-retailer-id")
+async def ignore_hub_retailer_id(entry_id: str, body: dict):
+    """Clear a retailer product ID and permanently ignore that value for auto-fill."""
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    key = body.get("key", "")      # e.g. "bestbuy"
+    value = body.get("value", "")  # the bad ID to ignore
+    if key and value:
+        if key not in entry.ignored_retailer_ids:
+            entry.ignored_retailer_ids[key] = []
+        if value not in entry.ignored_retailer_ids[key]:
+            entry.ignored_retailer_ids[key].append(value)
+        # Clear the current value if it matches
+        if entry.retailer_product_ids.get(key) == value:
+            entry.retailer_product_ids.pop(key, None)
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/product-ids")
+async def save_hub_product_ids(entry_id: str, body: dict):
+    """Save retailer product IDs (ASIN, Walmart item#, Best Buy SKU, Target TCIN) for a watchlist entry."""
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    # Merge incoming IDs; null/empty values clear the key
+    incoming = body.get("ids", {})
+    for key, val in incoming.items():
+        if val:
+            entry.retailer_product_ids[key] = str(val).strip()
+        else:
+            entry.retailer_product_ids.pop(key, None)
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()

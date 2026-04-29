@@ -546,6 +546,59 @@ header {
   gap: 16px;
 }
 
+/* Watchlist card grid */
+#hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.hub-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hub-card:hover { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.hub-stat-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 14px;
+  border-right: 1px solid var(--border);
+  min-width: 70px;
+}
+.hub-stat-pill:last-child { border-right: none; }
+.hub-stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.hub-stat-value { font-size: 13px; font-weight: 600; margin-top: 2px; }
+.hub-detail-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 8px 14px;
+  margin-bottom: -1px;
+  font-family: inherit;
+  transition: color 0.15s, border-color 0.15s;
+}
+.hub-detail-tab:hover { color: var(--text); }
+.hub-detail-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.hub-retailer-id-row {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.hub-retailer-id-row:last-child { border-bottom: none; }
+
 .product-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2083,8 +2136,8 @@ select.form-input option { background: var(--surface2); }
   <div>
     <div class="section-header">
       <div class="tab-bar">
-        <button class="tab-btn" id="tab-products" onclick="switchTab('products')">Watchlist</button>
-        <button class="tab-btn active" id="tab-deals" onclick="switchTab('deals')">Deals</button>
+        <button class="tab-btn active" id="tab-products" onclick="switchTab('products')">Watchlist</button>
+        <button class="tab-btn" id="tab-deals" onclick="switchTab('deals')">Deals</button>
         <button class="tab-btn" id="tab-tcgplayer" onclick="switchTab('tcgplayer')">TCGPlayer</button>
         <button class="tab-btn" id="tab-graded" onclick="switchTab('graded')">Graded</button>
         <button class="tab-btn" id="tab-portfolio" onclick="switchTab('portfolio')">Portfolio</button>
@@ -2095,8 +2148,9 @@ select.form-input option { background: var(--surface2); }
     </div>
 
     <!-- ── Products/Watchlist tab ───────────────────────────── -->
-    <div class="tab-panel" id="panel-products">
-    <div class="products-grid" id="hub-grid">
+    <div class="tab-panel active" id="panel-products">
+    <div id="hub-atc-alerts"></div>
+    <div id="hub-grid">
       <div class="empty-state">
         <strong>No watched items yet</strong>
         <p>Click <em>+ Add to Watchlist</em> to track a product.</p>
@@ -2105,7 +2159,7 @@ select.form-input option { background: var(--surface2); }
     </div><!-- /panel-products -->
 
     <!-- ── Deals tab (Discord-aggregated) ──────────────────── -->
-    <div class="tab-panel active" id="panel-deals">
+    <div class="tab-panel" id="panel-deals">
 
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
       <span style="font-size:12px;color:var(--muted)">Aggregated from Discord feeds</span>
@@ -2479,7 +2533,7 @@ select.form-input option { background: var(--surface2); }
 </div>
 
 <!-- ── Product Hub add/edit modal ───────────────────────────── -->
-<div class="modal-backdrop" id="hub-modal" onclick="if(event.target===this)closeHubModal()" style="display:none">
+<div class="modal-backdrop" id="hub-modal" onclick="if(event.target===this)closeHubModal()" style="display:none;z-index:300">
   <div class="modal" style="max-width:480px">
     <div class="modal-title" id="hub-modal-title">Add to Watchlist</div>
     <input type="hidden" id="hub-edit-id">
@@ -2495,6 +2549,39 @@ select.form-input option { background: var(--surface2); }
       <button class="btn btn-ghost btn-sm" onclick="closeHubModal()">Cancel</button>
       <button class="btn btn-primary btn-sm" onclick="submitHubEntry()">Save</button>
     </div>
+  </div>
+</div>
+
+<!-- ── Hub detail modal ─────────────────────────────────────── -->
+<div class="modal-backdrop" id="hub-detail-modal" onclick="if(event.target===this)closeHubDetail()" style="display:none">
+  <div class="modal" style="max-width:700px;max-height:88vh;display:flex;flex-direction:column;padding:0;overflow:hidden">
+    <!-- Sticky header -->
+    <div id="hub-detail-header" style="display:flex;align-items:flex-start;gap:12px;padding:16px 18px 12px;border-bottom:1px solid var(--border);flex-shrink:0">
+      <img id="hub-detail-img" src="" alt="" style="width:54px;height:54px;object-fit:contain;border-radius:6px;display:none" onerror="this.style.display='none'">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span id="hub-detail-name" style="font-size:15px;font-weight:700"></span>
+          <span id="hub-detail-tags" style="display:flex;gap:4px;flex-wrap:wrap"></span>
+        </div>
+        <div id="hub-detail-meta" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
+        <button class="btn btn-ghost btn-sm" onclick="openHubModal(_hubDetailId)" style="font-size:11px">Edit</button>
+        <button class="btn btn-ghost btn-sm" style="font-size:16px;padding:2px 6px;line-height:1" onclick="closeHubDetail()">✕</button>
+      </div>
+    </div>
+    <!-- Stats bar -->
+    <div id="hub-detail-stats" style="display:flex;flex-wrap:wrap;gap:0;border-bottom:1px solid var(--border);flex-shrink:0"></div>
+    <!-- Tab bar -->
+    <div style="display:flex;border-bottom:1px solid var(--border);flex-shrink:0;padding:0 18px">
+      <button class="hub-detail-tab" id="hub-dtab-listings" onclick="switchHubDetailTab('listings')">Listings</button>
+      <button class="hub-detail-tab active" id="hub-dtab-trends" onclick="switchHubDetailTab('trends')">Trends</button>
+      <button class="hub-detail-tab" id="hub-dtab-ebay" onclick="switchHubDetailTab('ebay')">eBay Sold</button>
+      <button class="hub-detail-tab" id="hub-dtab-deals" onclick="switchHubDetailTab('deals')">Deals</button>
+      <button class="hub-detail-tab" id="hub-dtab-links" onclick="switchHubDetailTab('links')">Links</button>
+    </div>
+    <!-- Scrollable content -->
+    <div id="hub-detail-content" style="overflow-y:auto;flex:1;padding:16px 18px"></div>
   </div>
 </div>
 
@@ -2700,15 +2787,26 @@ function connectWS() {
         prependRedditPost(msg.data);
         break;
       case 'tracked_deal_update':
-        updateTrackedDeal(msg.data);
+        { const prev = trackedDeals.find(d => d.id === msg.data.id);
+          const isNew = !prev;
+          const prevSightings = prev ? (prev.sightings || []).length : 0;
+          updateTrackedDeal(msg.data);
+          const gainedSighting = !isNew && (msg.data.sightings || []).length > prevSightings;
+          if (isNew || gainedSighting) _hubFireAtcTriggers(msg.data.id, prevSightings);
+          if (_activeTab === 'products') renderHubGrid();
+          if (_hubDetailId) _renderHubDetail();
+        }
         break;
       case 'tracked_deals_full':
         trackedDeals = msg.data;
         renderTrackedDeals();
+        if (_activeTab === 'products') renderHubGrid();
+        if (_hubDetailId) _renderHubDetail();
         break;
       case 'product_hub_full':
         hubEntries = msg.data;
         if (_activeTab === 'products') renderHubGrid();
+        if (_hubDetailId) _renderHubDetail();
         break;
       case 'discord_gateway_status':
         handleGatewayStatus(msg.data);
@@ -2793,6 +2891,7 @@ function renderFullState(state) {
 
   hubEntries = state.product_hub || [];
   if (_activeTab === 'products') renderHubGrid();
+  if (_hubDetailId) _renderHubDetail();
 
   const log = document.getElementById('log-body');
   log.innerHTML = '';
@@ -3930,7 +4029,7 @@ function clearFilters() {
 
 // ── Tab switching ───────────────────────────────────────────────
 
-let _activeTab = 'deals';
+let _activeTab = 'products';
 
 function switchTab(tab) {
   _activeTab = tab;
@@ -3959,12 +4058,16 @@ function switchTab(tab) {
 // ── Product Hub (Watchlist) ──────────────────────────────────────
 
 let hubEntries = [];
+let _hubDetailId = null;
+let _hubDetailTab = 'trends';
+
+// ── Watchlist grid ──────────────────────────────────────────────
 
 function renderHubGrid() {
   const grid = document.getElementById('hub-grid');
   if (!grid) return;
   if (!hubEntries.length) {
-    grid.innerHTML = `<div class="empty-state"><strong>No watched items yet</strong><p>Click <em>+ Add to Watchlist</em> to track a product.</p></div>`;
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><strong>No watched items yet</strong><p>Click <em>+ Add to Watchlist</em> to track a product.</p></div>`;
     return;
   }
   grid.innerHTML = hubEntries.map(hubCardHTML).join('');
@@ -3973,26 +4076,262 @@ function renderHubGrid() {
 function hubCardHTML(entry) {
   const tags = entry.tags || {};
   const tagChips = [tags.set, tags.product_type].filter(Boolean).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('');
-  const img = entry.image_url
-    ? `<div class="card-img-wrap"><img class="card-img" src="${escUrl(entry.image_url)}" alt="" loading="lazy" onerror="this.parentElement.style.display='none'"></div>`
+
+  // Linked TCGPlayer product
+  const p = (entry.tcgplayer_index != null) ? (products[entry.tcgplayer_index] || null) : null;
+  const imgSrc = entry.image_url || (p && p.image_url) || '';
+  const img = imgSrc
+    ? `<img src="${escUrl(imgSrc)}" alt="" style="width:100%;height:72px;object-fit:contain;border-radius:4px;margin-bottom:2px" loading="lazy" onerror="this.style.display='none'">`
     : '';
-  const retailers = (entry.retailer_urls || []).map(r =>
-    `<a href="${escUrl(r.url)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:10px">${esc(r.retailer)}</a>`
-  ).join('');
-  return `
-  <div class="product-card" id="hub-card-${entry.id}" style="position:relative">
+
+  // Price row
+  let priceRow = '';
+  if (p) {
+    const tcgLow = p.tcg_low_price != null ? `$${p.tcg_low_price.toFixed(2)}` : (p.price != null ? `$${p.price.toFixed(2)}` : null);
+    const mpLow  = p.mp_low_price  != null ? `$${p.mp_low_price.toFixed(2)}`  : null;
+    const qty    = p.tcg_quantity  != null ? p.tcg_quantity : (p.mp_quantity != null ? p.mp_quantity : null);
+    const cells = [];
+    if (tcgLow) cells.push(`<span style="color:var(--muted);font-size:10px">TCG</span> <strong style="font-size:11px">${tcgLow}</strong>`);
+    if (mpLow)  cells.push(`<span style="color:var(--muted);font-size:10px">MP</span> <strong style="font-size:11px">${mpLow}</strong>`);
+    if (qty != null) cells.push(`<span style="color:var(--muted);font-size:10px">Qty</span> <strong style="font-size:11px">${qty}</strong>`);
+    if (cells.length) priceRow = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${cells.join('')}</div>`;
+  }
+
+  // Deal summary: best price + last seen + ATC buttons per retailer
+  const matched = _hubMatchedDeals(entry);
+  let dealRow = '';
+  let atcRow  = '';
+  if (matched.length) {
+    // Best price across all matched deals
+    const bestPrice = matched.reduce((best, d) => {
+      const bp = d.best_price;
+      return (bp != null && (best == null || bp < best)) ? bp : best;
+    }, null);
+    // Last seen timestamp
+    const lastSeen = matched.reduce((latest, d) => {
+      if (!d.last_seen) return latest;
+      return (!latest || d.last_seen > latest) ? d.last_seen : latest;
+    }, null);
+    const agoStr = lastSeen ? _hubTimeAgo(lastSeen) : '';
+    const dealLabel = `${matched.length} deal${matched.length > 1 ? 's' : ''}`;
+    dealRow = `<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+      <span style="background:var(--accent);color:#000;border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700">${dealLabel}</span>
+      ${bestPrice != null ? `<strong style="font-size:11px;color:var(--green)">$${bestPrice.toFixed(2)}</strong>` : ''}
+      ${agoStr ? `<span style="font-size:10px;color:var(--muted)">${agoStr}</span>` : ''}
+    </div>`;
+
+    // ATC buttons — one per retailer, one button per quantity option from latest sighting
+    const retailerAtc = _hubAtcByRetailer(matched);
+    if (retailerAtc.length) {
+      const btns = retailerAtc.map(({retailer, urls}) => {
+        const prefix = retailer ? retailer + ' ' : '';
+        return urls.map((cu, idx) => {
+          const lbl = idx === 0 ? `${prefix}ATC` : (cu.label && cu.label !== 'ATC' ? cu.label : `×${idx + 1}`);
+          return `<a href="${escUrl(cu.url)}" target="_blank" rel="noopener"
+            onclick="event.stopPropagation()"
+            class="btn btn-primary btn-sm"
+            style="font-size:10px;padding:2px 7px;line-height:1.4">${esc(lbl)}</a>`;
+        }).join('');
+      }).join('');
+      atcRow = `<div style="display:flex;flex-wrap:wrap;gap:3px">${btns}</div>`;
+    }
+  }
+
+  const atcToggle = _hubAtcToggleHTML(entry);
+
+  return `<div class="hub-card" id="hub-card-${entry.id}" onclick="openHubDetail('${entry.id}')">
     ${img}
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:4px">
-      <strong style="font-size:13px">${esc(entry.name)}</strong>
-      <div style="display:flex;gap:4px;flex-shrink:0">
-        <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="openHubModal('${entry.id}')">Edit</button>
-        <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px;color:var(--red)" onclick="deleteHubEntry('${entry.id}')">✕</button>
-      </div>
+      <strong style="font-size:12px;line-height:1.3">${esc(entry.name)}</strong>
+      <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:1px 5px;flex-shrink:0" onclick="event.stopPropagation();deleteHubEntry('${entry.id}')">✕</button>
     </div>
-    ${tagChips ? `<div style="margin-top:4px">${tagChips}</div>` : ''}
-    ${retailers ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">${retailers}</div>` : ''}
+    ${tagChips ? `<div style="display:flex;flex-wrap:wrap;gap:3px">${tagChips}</div>` : ''}
+    ${priceRow}
+    ${dealRow}
+    ${atcRow}
+    ${atcToggle}
   </div>`;
 }
+
+// ── ATC auto-trigger toggles ────────────────────────────────────
+// Stored in localStorage: hub_atc_<entryId> = {enabled: bool, retailers: {amazon: bool, walmart: bool, ...}}
+
+function _hubAtcSettings(entryId) {
+  try { return JSON.parse(localStorage.getItem(`hub_atc_${entryId}`)) || {}; } catch { return {}; }
+}
+function _hubAtcSetEnabled(entryId, val) {
+  const s = _hubAtcSettings(entryId);
+  s.enabled = val;
+  localStorage.setItem(`hub_atc_${entryId}`, JSON.stringify(s));
+}
+function _hubAtcSetRetailer(entryId, retailer, val) {
+  const s = _hubAtcSettings(entryId);
+  if (!s.retailers) s.retailers = {};
+  s.retailers[retailer] = val;
+  localStorage.setItem(`hub_atc_${entryId}`, JSON.stringify(s));
+}
+function _hubAtcRetailerEnabled(entryId, retailer) {
+  const s = _hubAtcSettings(entryId);
+  if (!s.enabled) return false;
+  if (!s.retailers) return true;  // all on by default when master is on
+  return s.retailers[retailer] !== false;
+}
+
+// Called whenever a new deal arrives — shows a clickable alert banner
+// (window.open from a WS callback is blocked by browsers; user must click)
+function _hubFireAtcTriggers(newDealId, prevSightingCount) {
+  // prevSightingCount: number of sightings the deal had BEFORE this update
+  // used to detect which sightings are newly added so we can check their retailers
+  const alerts = [];
+  for (const entry of hubEntries) {
+    const s = _hubAtcSettings(entry.id);
+    if (!s.enabled) continue;
+    const matched = _hubMatchedDeals(entry);
+    const deal = matched.find(d => d.id === newDealId);
+    if (!deal) continue;
+
+    // Check that at least one new sighting is from a canonical retailer.
+    // This prevents silent no-op triggers from Refract/no-ATC sightings.
+    const newSightings = (deal.sightings || []).slice(prevSightingCount ?? 0);
+    const hasCanonicalNewSighting = newSightings.length === 0 // brand-new deal, no prior sightings
+      || newSightings.some(ns => _canonicalRetailer(ns.retailer) !== null);
+    if (!hasCanonicalNewSighting) continue;
+
+    // Pull ATC from ALL matched deals, not just the one that got the sighting.
+    // A new Refract Amazon sighting might not have ATC links, but a sibling
+    // Zephr deal for the same product will.
+    const groups = _hubAtcByRetailer(matched);
+    const enabledGroups = groups.filter(({retailer, urls}) => urls.length && _hubAtcRetailerEnabled(entry.id, retailer));
+    if (enabledGroups.length) alerts.push({entry, deal, groups: enabledGroups});
+  }
+  if (!alerts.length) return;
+
+  const container = document.getElementById('hub-atc-alerts');
+  if (!container) return;
+
+  // Switch to Watchlist tab so user sees the alert
+  if (_activeTab !== 'products') switchTab('products');
+
+  for (const {entry, deal, groups} of alerts) {
+    const alertId = `atc-alert-${entry.id}-${deal.id}`;
+    if (document.getElementById(alertId)) continue; // already shown
+
+    const btns = groups.map(({retailer, urls}) => {
+      const lbl = retailer ? retailer + ' ' : '';
+      // Show first URL as primary ATC button; additional quantity options as ×2, ×3…
+      return urls.map((cu, idx) => {
+        const btnLbl = idx === 0 ? `${lbl}Add to Cart` : (cu.label && cu.label !== 'ATC' ? cu.label : `×${idx + 1}`);
+        return `<a href="${escUrl(cu.url)}" target="_blank" rel="noopener"
+          class="btn btn-primary btn-sm" style="font-size:12px;padding:4px 12px"
+          onclick="document.getElementById('${alertId}').remove()"
+          >${esc(btnLbl)}</a>`;
+      }).join('');
+    }).join('');
+
+    const el = document.createElement('div');
+    el.id = alertId;
+    el.style.cssText = 'background:#1a3a1a;border:1px solid var(--green);border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap';
+    el.innerHTML = `
+      <span style="font-size:11px;font-weight:600;color:var(--green);flex-shrink:0">⚡ ATC Alert</span>
+      <span style="font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(entry.name)}">${esc(entry.name)}</span>
+      <span style="font-size:11px;color:var(--muted)">${esc(deal.name || '')}</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${btns}</div>
+      <button onclick="this.closest('[id^=atc-alert]').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;padding:0 2px;flex-shrink:0">✕</button>`;
+    container.prepend(el);
+
+    // Auto-dismiss after 5 minutes
+    setTimeout(() => el.remove(), 300000);
+  }
+}
+
+function _hubAtcToggleHTML(entry) {
+  const matched = _hubMatchedDeals(entry);
+  if (!matched.length) return '';   // no deals at all — nothing to trigger on
+  const s = _hubAtcSettings(entry.id);
+  const on = !!s.enabled;
+  const groups = _hubAtcByRetailer(matched);
+  // Retailer checkboxes only when we know which retailers have ATC links
+  const retailerToggles = groups.map(({retailer}) => {
+    const rOn = on && _hubAtcRetailerEnabled(entry.id, retailer);
+    const lbl = retailer && retailer !== 'unknown' ? retailer : 'ATC';
+    return `<label style="display:flex;align-items:center;gap:4px;font-size:10px;cursor:pointer">
+      <input type="checkbox" ${rOn ? 'checked' : ''} onchange="_hubAtcSetRetailer('${entry.id}','${retailer}',this.checked);renderHubGrid()" style="cursor:pointer">
+      ${esc(lbl)}
+    </label>`;
+  }).join('');
+  const noAtcNote = (!groups.length && on)
+    ? `<span style="font-size:9px;color:var(--muted)" title="Will trigger automatically when a deal with ATC links arrives">waiting for ATC…</span>`
+    : '';
+  return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-top:4px;border-top:1px solid var(--border);margin-top:4px" onclick="event.stopPropagation()">
+    <label style="display:flex;align-items:center;gap:4px;font-size:10px;font-weight:600;cursor:pointer" title="Show alert with ATC links when a new matching deal arrives">
+      <input type="checkbox" ${on ? 'checked' : ''} onchange="_hubAtcSetEnabled('${entry.id}',this.checked);renderHubGrid()" style="cursor:pointer">
+      Auto ATC
+    </label>
+    ${on && groups.length ? `<span style="font-size:9px;color:var(--muted)">|</span>${retailerToggles}` : ''}
+    ${noAtcNote}
+  </div>`;
+}
+
+// Canonical retailer name map — raw Discord retailer names → normalized key
+const _RETAILER_CANONICAL = [
+  ['amazon',   r => /amazon/.test(r)],
+  ['walmart',  r => /walmart/.test(r)],
+  ['best buy', r => /best.?buy/.test(r)],
+  ['target',   r => /\btarget\b/.test(r)],
+  ['gamestop', r => /gamestop/.test(r)],
+];
+
+function _canonicalRetailer(raw) {
+  const s = (raw || '').toLowerCase();
+  for (const [name, test] of _RETAILER_CANONICAL) {
+    if (test(s)) return name;
+  }
+  return null;  // unknown / third-party — excluded
+}
+
+function _hubAtcByRetailer(matchedDeals) {
+  // Returns [{retailer, urls:[{url,label}]}] — one entry per canonical retailer.
+  // Uses only the MOST RECENT sighting that has checkout_urls for each retailer,
+  // so the count reflects distinct quantity options (1,2,4…) not historical cart tokens.
+  const map = {};  // canonicalRetailer -> [{url, label}]
+  for (const d of matchedDeals) {
+    for (const s of (d.sightings || [])) {
+      if (!(s.checkout_urls && s.checkout_urls.length)) continue;
+      const canonical = _canonicalRetailer(s.retailer);
+      if (!canonical) continue;        // skip third-party / unknown retailers
+      if (map[canonical]) continue;    // already captured a more-recent sighting
+      map[canonical] = s.checkout_urls.slice(0, 6).map(cu => ({url: cu.url, label: cu.label || 'ATC'}));
+    }
+  }
+  return Object.entries(map).map(([retailer, urls]) => ({retailer, urls}));
+}
+
+function _hubTimeAgo(isoStr) {
+  if (!isoStr) return '';
+  const diff = (Date.now() - new Date(isoStr).getTime()) / 1000;
+  if (diff < 60)   return `${Math.round(diff)}s ago`;
+  if (diff < 3600) return `${Math.round(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.round(diff/3600)}h ago`;
+  return `${Math.round(diff/86400)}d ago`;
+}
+
+function _hubMatchedDeals(entry) {
+  // Deals explicitly assigned + auto-matched by name word overlap, minus excluded
+  const assigned = new Set(entry.deal_ids || []);
+  const excluded = new Set(entry.excluded_deal_ids || []);
+  const name = (entry.name || '').toLowerCase();
+  const nameWords = new Set(name.split(/\s+/).filter(w => w.length >= 4));
+  return trackedDeals.filter(d => {
+    if (excluded.has(d.id)) return false;
+    if (assigned.has(d.id)) return true;
+    if (!nameWords.size) return false;
+    const dWords = new Set((d.name || '').toLowerCase().split(/\s+/).filter(w => w.length >= 4));
+    const inter = [...nameWords].filter(w => dWords.has(w)).length;
+    return inter >= 2;
+  });
+}
+
+// ── Hub add/edit modal ──────────────────────────────────────────
 
 function openHubModal(entryId) {
   const modal = document.getElementById('hub-modal');
@@ -4033,7 +4372,6 @@ async function submitHubEntry() {
       product_type: document.getElementById('hub-product_type').value.trim() || undefined,
     },
   };
-  // Remove undefined tag keys
   Object.keys(body.tags).forEach(k => body.tags[k] === undefined && delete body.tags[k]);
   try {
     if (entryId) {
@@ -4042,6 +4380,8 @@ async function submitHubEntry() {
       await fetch('/api/product-hub', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     }
     closeHubModal();
+    // Refresh detail if it's open for this entry
+    if (_hubDetailId === entryId) _renderHubDetail();
   } catch (e) {
     alert('Failed to save entry: ' + e);
   }
@@ -4051,8 +4391,726 @@ async function deleteHubEntry(entryId) {
   if (!confirm('Remove this item from your watchlist?')) return;
   try {
     await fetch(`/api/product-hub/${entryId}`, { method: 'DELETE' });
+    if (_hubDetailId === entryId) closeHubDetail();
   } catch (e) {
     alert('Failed to delete entry: ' + e);
+  }
+}
+
+// ── Hub detail modal ────────────────────────────────────────────
+
+function openHubDetail(entryId) {
+  _hubDetailId = entryId;
+  _hubDetailTab = 'trends';
+  // Close histogram/chart modal if open so it doesn't stack behind
+  document.getElementById('histogram-modal')?.classList.remove('open');
+  document.getElementById('hub-detail-modal').style.display = 'flex';
+  _renderHubDetail();
+}
+
+function closeHubDetail() {
+  document.getElementById('hub-detail-modal').style.display = 'none';
+  _hubDetailId = null;
+}
+
+function switchHubDetailTab(tab) {
+  _hubDetailTab = tab;
+  document.querySelectorAll('.hub-detail-tab').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById(`hub-dtab-${tab}`);
+  if (btn) btn.classList.add('active');
+  _renderHubDetailContent();
+}
+
+function _renderHubDetail() {
+  const entry = hubEntries.find(e => e.id === _hubDetailId);
+  if (!entry) return;
+  const p = (entry.tcgplayer_index != null) ? (products[entry.tcgplayer_index] || null) : null;
+
+  // Header
+  const imgSrc = entry.image_url || (p && p.image_url) || '';
+  const imgEl = document.getElementById('hub-detail-img');
+  if (imgSrc) { imgEl.src = imgSrc; imgEl.style.display = ''; } else { imgEl.style.display = 'none'; }
+  document.getElementById('hub-detail-name').textContent = entry.name;
+  const tags = entry.tags || {};
+  document.getElementById('hub-detail-tags').innerHTML =
+    [tags.set, tags.product_type].filter(Boolean).map(t => `<span class="tag-chip">${esc(t)}</span>`).join('');
+  document.getElementById('hub-detail-meta').textContent =
+    p ? `Linked to TCGPlayer: ${esc(p.name)}` : 'No TCGPlayer product linked';
+
+  // Stats bar
+  const stats = [];
+  if (p) {
+    const _tcgLow = p.tcg_low_price ?? p.price;
+    if (_tcgLow != null)           stats.push({label:'TCG LOW',  val:`$${_tcgLow.toFixed(2)}`,          color:''});
+    if (p.tcg_quantity != null)    stats.push({label:'TCG QTY',  val:p.tcg_quantity,                     color:p.tcg_quantity > 0 ? 'var(--green)' : 'var(--red)'});
+    if (p.mp_low_price != null)    stats.push({label:'MP LOW',   val:`$${p.mp_low_price.toFixed(2)}`,    color:''});
+    if (p.mp_market_price != null) stats.push({label:'MP MKT',   val:`$${p.mp_market_price.toFixed(2)}`, color:'var(--muted)'});
+    if (p.mp_quantity != null)     stats.push({label:'MP QTY',   val:p.mp_quantity,                      color:p.mp_quantity > 0 ? 'var(--green)' : 'var(--red)'});
+    const sales = (p.ebay_sales || []).filter(s => !s.ignored && !s.outlier);
+    if (sales.length) {
+      const prices = sales.map(s => s.price).sort((a,b)=>a-b);
+      const med = prices[Math.floor(prices.length/2)];
+      stats.push({label:'EBAY MED', val:`$${med.toFixed(2)}`, color:''});
+      stats.push({label:'EBAY LOW', val:`$${prices[0].toFixed(2)}`, color:'var(--green)'});
+    }
+  }
+  document.getElementById('hub-detail-stats').innerHTML = stats.length
+    ? stats.map(s => `<div class="hub-stat-pill"><span class="hub-stat-label">${s.label}</span><span class="hub-stat-value" style="color:${s.color || 'var(--text)'}">${s.val}</span></div>`).join('')
+    : `<div style="padding:8px 18px;color:var(--muted);font-size:12px">No price data — link a TCGPlayer product in the Links tab.</div>`;
+
+  // Reset tabs
+  document.querySelectorAll('.hub-detail-tab').forEach(b => b.classList.remove('active'));
+  const activeBtn = document.getElementById(`hub-dtab-${_hubDetailTab}`);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  _renderHubDetailContent();
+}
+
+function _renderHubDetailContent() {
+  const entry = hubEntries.find(e => e.id === _hubDetailId);
+  if (!entry) return;
+  const p = (entry.tcgplayer_index != null) ? (products[entry.tcgplayer_index] || null) : null;
+  const el = document.getElementById('hub-detail-content');
+
+  if (_hubDetailTab === 'listings')  el.innerHTML = _hubDetailListingsHTML(entry, p);
+  if (_hubDetailTab === 'trends')   { el.innerHTML = _hubDetailTrendsHTML(entry, p); _hubDetailTrendsInit(entry, p); }
+  if (_hubDetailTab === 'ebay')      el.innerHTML = _hubDetailEbayHTML(entry, p);
+  if (_hubDetailTab === 'deals')     el.innerHTML = _hubDetailDealsHTML(entry);
+  if (_hubDetailTab === 'links')     { el.innerHTML = _hubDetailLinksHTML(entry, p); _hubAutoFillRetailerIds(entry); }
+}
+
+function _hubDetailListingsHTML(entry, p) {
+  if (!p) return `<div class="empty-state">No TCGPlayer product linked. Go to the <a href="#" onclick="switchHubDetailTab('links');return false">Links</a> tab to connect one.</div>`;
+
+  const tcgLow = p.tcg_low_price != null ? `$${p.tcg_low_price.toFixed(2)}` : (p.price != null ? `$${p.price.toFixed(2)}` : '—');
+  const tcgMkt = p.price != null && p.tcg_low_price != null ? `$${p.price.toFixed(2)}` : null;
+  const tcgQty = p.tcg_quantity != null ? p.tcg_quantity : '—';
+  const avail  = p.available ? `<span style="color:var(--green)">In Stock</span>` : `<span style="color:var(--red)">Out of Stock</span>`;
+
+  let html = `<div style="margin-bottom:16px">
+    <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">TCGPlayer</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:8px">
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 10px"><div style="font-size:10px;color:var(--muted)">Low (incl. ship)</div><div style="font-size:15px;font-weight:700">${tcgLow}</div></div>
+      ${tcgMkt ? `<div style="background:var(--surface2);border-radius:6px;padding:8px 10px"><div style="font-size:10px;color:var(--muted)">Market Price</div><div style="font-size:15px;font-weight:700">${tcgMkt}</div></div>` : ''}
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 10px"><div style="font-size:10px;color:var(--muted)">Qty Available</div><div style="font-size:15px;font-weight:700">${tcgQty}</div></div>
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 10px"><div style="font-size:10px;color:var(--muted)">Status</div><div style="font-size:13px;font-weight:600;margin-top:2px">${avail}</div></div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <a href="${escUrl(p.url)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:11px">Open TCGPlayer →</a>
+      ${p.last_checked ? `<span style="font-size:10px;color:var(--muted)">Last checked: ${new Date(p.last_checked*1000).toLocaleString()}</span>` : ''}
+    </div>
+  </div>`;
+
+  // ManaPool section
+  if (p.mp_low_price != null || p.mp_quantity != null || p.mp_market_price != null) {
+    const mpLow = p.mp_low_price    != null ? `$${p.mp_low_price.toFixed(2)}`    : '—';
+    const mpMkt = p.mp_market_price != null ? `$${p.mp_market_price.toFixed(2)}` : '—';
+    const mpQty = p.mp_quantity     != null ? p.mp_quantity                       : '—';
+    html += `<div>
+      <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">ManaPool</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px">
+        <div style="background:var(--surface2);border-radius:6px;padding:8px 10px"><div style="font-size:10px;color:var(--muted)">Lowest Listing</div><div style="font-size:15px;font-weight:700">${mpLow}</div></div>
+        <div style="background:var(--surface2);border-radius:6px;padding:8px 10px"><div style="font-size:10px;color:var(--muted)">Market Price</div><div style="font-size:15px;font-weight:700">${mpMkt}</div></div>
+        <div style="background:var(--surface2);border-radius:6px;padding:8px 10px"><div style="font-size:10px;color:var(--muted)">Qty Available</div><div style="font-size:15px;font-weight:700">${mpQty}</div></div>
+      </div>
+    </div>`;
+  }
+
+  return html;
+}
+
+function _hubDetailTrendsHTML(entry, p) {
+  if (!p) return `<div class="empty-state">No TCGPlayer product linked. Go to the <a href="#" onclick="switchHubDetailTab('links');return false">Links</a> tab to connect one.</div>`;
+  const idx = entry.tcgplayer_index;
+  const trend = _tcgTrends[idx] || {};
+
+  const pricePct = trend.price_trend;
+  const supplyPct = trend.listings_trend;
+  const avg7d = trend.avg_7d;
+
+  const priceBadge = (() => {
+    if (pricePct == null) return '<span style="color:var(--muted)">No data</span>';
+    const abs = Math.abs(pricePct);
+    const dir = pricePct > 0 ? '▲' : '▼';
+    const col = pricePct > 0 ? 'var(--red)' : 'var(--green)';
+    const label = pricePct > 0 ? 'above' : 'below';
+    return `<span style="color:${col};font-size:16px;font-weight:700">${dir} ${abs.toFixed(1)}%</span>
+            <span style="color:var(--muted);font-size:11px;margin-left:4px">${label} 7-day avg${avg7d != null ? ` ($${avg7d.toFixed(2)})` : ''}</span>`;
+  })();
+
+  const supplyBadge = (() => {
+    if (supplyPct == null) return '<span style="color:var(--muted)">No data</span>';
+    const abs = Math.abs(supplyPct);
+    if (abs < 5) return '<span style="color:var(--muted)">Stable</span>';
+    const dir = supplyPct > 0 ? '▲' : '▼';
+    const col = supplyPct > 0 ? 'var(--green)' : 'var(--red)';
+    const word = supplyPct > 0 ? 'Rising' : 'Falling';
+    return `<span style="color:${col};font-size:16px;font-weight:700">${dir} ${abs.toFixed(0)}%</span>
+            <span style="color:var(--muted);font-size:11px;margin-left:4px">${word} vs 7-day avg</span>`;
+  })();
+
+  const tcgLow = p.tcg_low_price ?? p.price;
+  const last = tcgLow != null ? `$${tcgLow.toFixed(2)}` : '—';
+
+  return `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+    <div style="background:var(--surface2);border-radius:8px;padding:12px 14px">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Price Trend</div>
+      <div style="display:flex;align-items:baseline;flex-wrap:wrap">${priceBadge}</div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:12px 14px">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Supply Trend</div>
+      <div style="display:flex;align-items:baseline;flex-wrap:wrap">${supplyBadge}</div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:12px 14px">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Current Low</div>
+      <div style="font-size:18px;font-weight:700">${last}</div>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:12px 14px">
+      <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">7-Day Average</div>
+      <div style="font-size:18px;font-weight:700">${avg7d != null ? `$${avg7d.toFixed(2)}` : '—'}</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
+    <span style="font-size:11px;color:var(--muted)">History range:</span>
+    ${['7','30','90'].map(d =>
+      `<button class="btn btn-ghost btn-sm hub-trend-day" data-days="${d}" style="font-size:11px;padding:2px 8px" onclick="loadHubTrendChart(${idx},${d})">${d}d</button>`
+    ).join('')}
+  </div>
+  <div style="position:relative;height:180px">
+    <canvas id="hub-trend-chart" style="width:100%;height:100%"></canvas>
+    <div id="hub-trend-empty" style="display:none;position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px">No price history yet</div>
+  </div>
+  `;
+}
+
+let _hubTrendChart = null;
+
+async function _hubDetailTrendsInit(entry, p) {
+  if (!p || entry.tcgplayer_index == null) return;
+  await loadHubTrendChart(entry.tcgplayer_index, 30);
+}
+
+async function loadHubTrendChart(idx, days) {
+  // Highlight active button
+  document.querySelectorAll('.hub-trend-day').forEach(b => {
+    b.style.borderColor = parseInt(b.dataset.days) === days ? 'var(--accent)' : '';
+    b.style.color = parseInt(b.dataset.days) === days ? 'var(--accent)' : '';
+  });
+
+  const canvas = document.getElementById('hub-trend-chart');
+  const empty  = document.getElementById('hub-trend-empty');
+  if (!canvas) return;
+
+  try {
+    const res = await fetch(`/api/price-history/${idx}?days=${days}`);
+    const data = await res.json();
+    const pts = data.points || [];
+    if (!pts.length) {
+      if (empty) { empty.style.display = 'flex'; canvas.style.visibility = 'hidden'; }
+      return;
+    }
+    if (empty) { empty.style.display = 'none'; canvas.style.visibility = ''; }
+
+    if (_hubTrendChart) { _hubTrendChart.destroy(); _hubTrendChart = null; }
+
+    const labels = pts.map(pt => {
+      const d = new Date(pt.checked_at * 1000);
+      return days <= 7 ? d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : d.toLocaleDateString([], {month:'short',day:'numeric'});
+    });
+    const market = pts.map(pt => pt.market_price);
+    const low    = pts.map(pt => pt.low_price);
+
+    _hubTrendChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label:'Market', data:market, borderColor:'#c9a84c', backgroundColor:'rgba(201,168,76,0.08)', borderWidth:2, pointRadius:2, tension:0.3, fill:true, spanGaps:true },
+          { label:'Low',    data:low,    borderColor:'#a6e3a1', backgroundColor:'rgba(166,227,161,0.05)', borderWidth:2, pointRadius:2, tension:0.3, fill:false, spanGaps:true },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: false,
+        plugins: { legend: { labels: { color:'#cdd6f4', font:{size:10} } } },
+        scales: {
+          x: { ticks:{ color:'#6c7086', font:{size:9}, maxTicksLimit:8 }, grid:{ color:'rgba(255,255,255,0.05)' } },
+          y: { ticks:{ color:'#6c7086', font:{size:9}, callback: v => `$${v}` }, grid:{ color:'rgba(255,255,255,0.05)' } },
+        },
+      },
+    });
+  } catch(e) {
+    if (empty) { empty.textContent = 'Failed to load history'; empty.style.display = 'flex'; }
+  }
+}
+
+function _hubDetailEbayHTML(entry, p) {
+  if (!p) return `<div class="empty-state">No TCGPlayer product linked — eBay sales are fetched for TCGPlayer products.</div>`;
+  const sales = (p.ebay_sales || []).filter(s => !s.ignored && !s.outlier);
+  if (!sales.length) return `<div class="empty-state">No eBay sales on record yet. Sales populate automatically on the next eBay check.</div>`;
+
+  const prices = sales.map(s => s.price).sort((a,b)=>a-b);
+  const med = prices[Math.floor(prices.length/2)];
+  const avg = prices.reduce((a,b)=>a+b,0)/prices.length;
+  const salesIdx = entry.tcgplayer_index;
+
+  const recentRows = [...sales].slice(0, 30).map(s => `
+    <tr>
+      <td style="padding:3px 6px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.title||'')}">${esc((s.title||'').substring(0,60))}</td>
+      <td style="padding:3px 8px;text-align:right;font-weight:600">$${(s.price||0).toFixed(2)}</td>
+      <td style="padding:3px 6px;color:var(--muted);font-size:11px">${s.date ? new Date(s.date).toLocaleDateString() : ''}</td>
+    </tr>`).join('');
+
+  return `<div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 14px;text-align:center"><div style="font-size:10px;color:var(--muted)">Median</div><div style="font-size:16px;font-weight:700">$${med.toFixed(2)}</div></div>
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 14px;text-align:center"><div style="font-size:10px;color:var(--muted)">Average</div><div style="font-size:16px;font-weight:700">$${avg.toFixed(2)}</div></div>
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 14px;text-align:center"><div style="font-size:10px;color:var(--muted)">Low</div><div style="font-size:16px;font-weight:700;color:var(--green)">$${prices[0].toFixed(2)}</div></div>
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 14px;text-align:center"><div style="font-size:10px;color:var(--muted)">High</div><div style="font-size:16px;font-weight:700">$${prices[prices.length-1].toFixed(2)}</div></div>
+      <div style="background:var(--surface2);border-radius:6px;padding:8px 14px;text-align:center"><div style="font-size:10px;color:var(--muted)">Sales</div><div style="font-size:16px;font-weight:700">${sales.length}</div></div>
+    </div>
+    <div style="overflow-x:auto;margin-bottom:10px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:3px 6px;text-align:left;color:var(--muted);font-weight:500">Title</th>
+          <th style="padding:3px 8px;text-align:right;color:var(--muted);font-weight:500">Price</th>
+          <th style="padding:3px 6px;color:var(--muted);font-weight:500">Date</th>
+        </tr></thead>
+        <tbody>${recentRows}</tbody>
+      </table>
+    </div>
+    ${salesIdx != null ? `<button class="btn btn-ghost btn-sm" onclick="closeHubDetail();openSalesModal(${salesIdx})">Full Sales Review →</button>` : ''}
+  </div>`;
+}
+
+function _hubDetailDealsHTML(entry) {
+  const matched = _hubMatchedDeals(entry);
+
+  // ATC toggle section — always shown when there are matched deals (even without ATC links yet)
+  const s = _hubAtcSettings(entry.id);
+  const masterOn = !!s.enabled;
+  const groups = _hubAtcByRetailer(matched);
+  let toggleSection = '';
+  if (matched.length) {
+    const retailerRows = groups.map(({retailer, urls}) => {
+      const rOn = masterOn && _hubAtcRetailerEnabled(entry.id, retailer);
+      const lbl = retailer || 'ATC';
+      const countNote = urls.length > 1 ? ` <span style="color:var(--muted);font-size:10px">(${urls.length} qty options)</span>` : '';
+      return `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+        <input type="checkbox" ${rOn ? 'checked' : ''} ${!masterOn ? 'disabled' : ''}
+          onchange="_hubAtcSetRetailer('${entry.id}','${retailer}',this.checked);_renderHubDetailContent();renderHubGrid()">
+        ${esc(lbl)}${countNote}
+      </label>`;
+    }).join('');
+    const noAtcNote = (!groups.length && masterOn)
+      ? `<div style="font-size:11px;color:var(--muted);font-style:italic;margin-top:8px">No ATC links seen yet — alert will fire automatically when a deal with Add-to-Cart links arrives.</div>`
+      : '';
+    toggleSection = `<div style="background:var(--surface2);border-radius:8px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Auto ATC Trigger</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">When a new matching deal arrives, an alert banner appears at the top of the Watchlist tab with a direct Add-to-Cart button. Enable per retailer below.</div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;cursor:pointer;margin-bottom:${masterOn ? '10px' : '0'}">
+        <input type="checkbox" ${masterOn ? 'checked' : ''}
+          onchange="_hubAtcSetEnabled('${entry.id}',this.checked);_renderHubDetailContent();renderHubGrid()">
+        Alert enabled
+      </label>
+      ${masterOn && retailerRows ? `<div style="display:flex;gap:14px;flex-wrap:wrap;padding-left:4px">${retailerRows}</div>` : ''}
+      ${noAtcNote}
+    </div>`;
+  }
+
+  if (!matched.length) return `<div class="empty-state">No matching deals found. Deals are auto-matched by product name, or you can assign them from the Deals tab.</div>`;
+
+  const dealCards = matched.map(d => {
+    const price = d.best_price != null ? `<strong>$${d.best_price.toFixed(2)}</strong>` : '';
+    const ts = d.last_seen ? _hubTimeAgo(d.last_seen) : '';
+    const pinned = (entry.deal_ids || []).includes(d.id);
+    const pinBtn = pinned
+      ? `<button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="unassignHubDeal('${entry.id}','${d.id}')">Unpin</button>`
+      : `<button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="assignHubDeal('${entry.id}','${d.id}')">Pin</button>`;
+    const removeBtn = `<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" onclick="excludeHubDeal('${entry.id}','${d.id}')" title="Remove this deal from this watchlist entry">Remove</button>`;
+
+    // Checkout links from most recent sighting per retailer
+    const groups = _hubAtcByRetailer([d]);
+    const atcLinks = groups.map(({retailer, urls}) =>
+      urls.slice(0,4).map((cu, idx) => {
+        const lbl = idx === 0 ? (retailer ? retailer + ' ATC' : 'ATC') : (cu.label !== 'ATC' ? cu.label : `×${idx+1}`);
+        return `<a href="${escUrl(cu.url)}" target="_blank" class="btn btn-primary btn-sm" style="font-size:10px">${esc(lbl)}</a>`;
+      }).join('')
+    ).join('');
+
+    return `<div style="background:var(--surface2);border-radius:6px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.name||'')}">${esc(d.name||'Deal')}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:1px">${ts}${price ? ' · ' + price : ''}${pinned ? ' · <span style="color:var(--accent)">pinned</span>' : ''}</div>
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0">${atcLinks}${pinBtn}${removeBtn}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Excluded deals section (collapsible restore list)
+  const excludedIds = entry.excluded_deal_ids || [];
+  const excludedDeals = trackedDeals.filter(d => excludedIds.includes(d.id));
+  const excludedSection = excludedDeals.length ? `
+    <details style="margin-top:12px">
+      <summary style="font-size:11px;color:var(--muted);cursor:pointer;user-select:none">${excludedDeals.length} excluded deal${excludedDeals.length>1?'s':''} — click to restore</summary>
+      <div style="margin-top:6px">
+        ${excludedDeals.map(d => `
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;background:var(--surface2);border-radius:4px;margin-bottom:4px;opacity:0.6">
+            <span style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name||'')}</span>
+            <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="unexcludeHubDeal('${entry.id}','${d.id}')">Restore</button>
+          </div>`).join('')}
+      </div>
+    </details>` : '';
+
+  return toggleSection + dealCards + excludedSection;
+}
+
+function _hubDetailLinksHTML(entry, p) {
+  const pids = entry.retailer_product_ids || {};
+
+  // TCGPlayer link section
+  const tcgSection = (() => {
+    if (entry.tcgplayer_index != null && p) {
+      return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:12px">${esc(p.name)}</span>
+        <a href="${escUrl(p.url)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:10px">Open →</a>
+        <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" onclick="unlinkHubTcgplayer('${entry.id}')">Unlink</button>
+      </div>`;
+    }
+    const opts = products.map((prod, i) => `<option value="${i}">${esc(prod.name)}</option>`).join('');
+    return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select id="hub-link-tcg-sel" class="form-input" style="flex:1;font-size:12px;max-width:340px">
+        <option value="">— Select TCGPlayer product —</option>
+        ${opts}
+      </select>
+      <button class="btn btn-primary btn-sm" style="font-size:11px" onclick="linkHubTcgplayer('${entry.id}')">Link</button>
+    </div>`;
+  })();
+
+  // Retailer product IDs
+  const retailers = [
+    {
+      key: 'amazon', label: 'Amazon', id_name: 'ASIN',
+      help: 'Find on the product page URL: amazon.com/dp/<b>ASIN</b> or in the product details table.',
+      atcFn: asin => `https://amazon.com/gp/aws/cart/add.html?ASIN.1=${asin}&Quantity.1=1`,
+      listFn: asin => `https://amazon.com/dp/${asin}`,
+    },
+    {
+      key: 'walmart', label: 'Walmart', id_name: 'Item #',
+      help: 'On the product page URL: walmart.com/ip/<b>Item-Name</b>/<b>ItemID</b> — it\'s the number at the end.',
+      atcFn: id => `https://www.walmart.com/cart/add?items=${id}`,
+      listFn: id => `https://www.walmart.com/ip/${id}`,
+    },
+    {
+      key: 'bestbuy', label: 'Best Buy', id_name: 'SKU',
+      help: 'Shown on the product page under "Item:" or in the URL: bestbuy.com/site/.../<b>SKU</b>.p',
+      atcFn: sku => `https://www.bestbuy.com/cart/api/v1/addToCart?items=%5B%7B%22skuId%22%3A%22${sku}%22%7D%5D`,
+      listFn: sku => `https://www.bestbuy.com/site/x/${sku}.p`,
+    },
+    {
+      key: 'target', label: 'Target', id_name: 'TCIN',
+      help: 'Found in the URL: target.com/p/.../-/A-<b>TCIN</b> — the number after "A-".',
+      atcFn: tcin => `https://www.target.com/p/-/A-${tcin}`,
+      listFn: tcin => `https://www.target.com/p/-/A-${tcin}`,
+    },
+  ];
+
+  const ignoredIds = entry.ignored_retailer_ids || {};
+  const retailerRows = retailers.map(r => {
+    const val = pids[r.key] || '';
+    const ignoredForKey = ignoredIds[r.key] || [];
+    const ignoredNote = ignoredForKey.length
+      ? `<span style="font-size:10px;color:var(--muted);margin-left:4px" title="Ignored: ${esc(ignoredForKey.join(', '))}">🚫 ${ignoredForKey.length} ignored</span>`
+      : '';
+    const actionBtns = val
+      ? `<a href="${r.listFn(val)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:10px">View →</a>
+         <a href="${r.atcFn(val)}" target="_blank" class="btn btn-primary btn-sm" style="font-size:10px">Add to Cart</a>
+         <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" title="Clear this ID and never auto-fill it again"
+           onclick="ignoreHubRetailerId('${entry.id}','${r.key}','${esc(val)}')">Unmap &amp; Ignore</button>`
+      : '';
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+        <strong style="font-size:12px;min-width:72px">${r.label}</strong>
+        <input type="text" class="form-input" id="hub-pid-${r.key}-${entry.id}" value="${esc(val)}" placeholder="${r.id_name}"
+          style="flex:1;max-width:200px;font-size:12px;font-family:monospace"
+          onchange="saveHubProductId('${entry.id}','${r.key}',this.value)">
+        <div style="display:flex;gap:4px;flex-wrap:wrap">${actionBtns}</div>
+        ${ignoredNote}
+      </div>
+      <div style="font-size:11px;color:var(--muted)">${r.help}</div>
+    </div>`;
+  }).join('');
+
+  // Retailer URLs (free-form)
+  const urlRows = (entry.retailer_urls || []).map(r =>
+    `<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+      <a href="${escUrl(r.url)}" target="_blank" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.retailer)}: ${esc(r.url)}</a>
+      <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red);flex-shrink:0" onclick="removeHubRetailerFromDetail('${entry.id}','${esc(r.retailer)}')">✕</button>
+    </div>`
+  ).join('');
+
+  return `
+  <div style="margin-bottom:20px">
+    <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">TCGPlayer Link</div>
+    ${tcgSection}
+  </div>
+
+  <div style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Retailer Product IDs</div>
+      <button class="btn btn-ghost btn-sm" style="font-size:10px;margin-left:auto" onclick="retryHubAutoFill('${entry.id}')" title="Re-scan matched deals for product IDs (respects ignore list)">↻ Re-scan from Deals</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Enter the product ID for each retailer to get direct listing and add-to-cart links.</div>
+    ${retailerRows}
+  </div>
+
+  <div>
+    <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Retailer URLs</div>
+    ${urlRows || '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">No retailer URLs added yet.</div>'}
+    <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+      <input type="text" class="form-input" id="hub-rl-name-${entry.id}" placeholder="Retailer name" style="flex:0 0 140px;font-size:12px">
+      <input type="text" class="form-input" id="hub-rl-url-${entry.id}" placeholder="https://..." style="flex:1;font-size:12px">
+      <button class="btn btn-primary btn-sm" style="font-size:11px" onclick="addHubRetailerFromDetail('${entry.id}')">Add URL</button>
+    </div>
+  </div>`;
+}
+
+// ── Hub action helpers ──────────────────────────────────────────
+
+async function linkHubTcgplayer(entryId) {
+  const sel = document.getElementById('hub-link-tcg-sel');
+  if (!sel || sel.value === '') return;
+  await fetch(`/api/product-hub/${entryId}/link-tcgplayer`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({tcgplayer_index: parseInt(sel.value)}),
+  });
+}
+
+async function unlinkHubTcgplayer(entryId) {
+  await fetch(`/api/product-hub/${entryId}/link-tcgplayer`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({tcgplayer_index: null}),
+  });
+}
+
+async function assignHubDeal(entryId, dealId) {
+  await fetch(`/api/product-hub/${entryId}/assign-deal`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({deal_id: dealId}),
+  });
+}
+
+async function unassignHubDeal(entryId, dealId) {
+  await fetch(`/api/product-hub/${entryId}/unassign-deal`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({deal_id: dealId}),
+  });
+}
+
+async function ignoreHubRetailerId(entryId, retailerKey, value) {
+  if (!value) return;
+  await fetch(`/api/product-hub/${entryId}/ignore-retailer-id`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({key: retailerKey, value}),
+  });
+}
+
+async function saveHubProductId(entryId, retailerKey, value) {
+  await fetch(`/api/product-hub/${entryId}/product-ids`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ids: {[retailerKey]: value}}),
+  });
+}
+
+async function excludeHubDeal(entryId, dealId) {
+  await fetch(`/api/product-hub/${entryId}/exclude-deal`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({deal_id: dealId}),
+  });
+}
+
+async function unexcludeHubDeal(entryId, dealId) {
+  await fetch(`/api/product-hub/${entryId}/unexclude-deal`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({deal_id: dealId}),
+  });
+}
+
+async function addHubRetailerFromDetail(entryId) {
+  const nameEl = document.getElementById(`hub-rl-name-${entryId}`);
+  const urlEl  = document.getElementById(`hub-rl-url-${entryId}`);
+  if (!nameEl || !urlEl) return;
+  const retailer = nameEl.value.trim();
+  const url = urlEl.value.trim();
+  if (!retailer || !url) return;
+  await fetch(`/api/product-hub/${entryId}/retailer`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({retailer, url}),
+  });
+  nameEl.value = ''; urlEl.value = '';
+}
+
+async function removeHubRetailerFromDetail(entryId, retailer) {
+  await fetch(`/api/product-hub/${entryId}/retailer/${encodeURIComponent(retailer)}`, {method: 'DELETE'});
+}
+
+// ── Retailer ID auto-extraction from deal URLs ──────────────────
+
+function _parseRetailerIdFromUrl(url) {
+  // Returns {key, value} or null
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace('www.', '');
+    const path = u.pathname;
+
+    // ── Deal-bot affiliate redirect URLs (Zephr, Moonitor, Refract) ──
+    // These encode the retailer product ID in query params and redirect to the actual retailer.
+    // Zephr: offers.zephr.app/r/p?a=B0GF44F4MG  (a= is Amazon ASIN)
+    // Moonitor: moonitor.app/...?asin=B0GF44F4MG
+    // Refract: refract.gg/...?asin=B0GF44F4MG
+    const isDealBot = host.includes('zephr.app') || host.includes('moonitor.app') || host.includes('refract.gg');
+    if (isDealBot) {
+      const asin = u.searchParams.get('a') || u.searchParams.get('asin') || u.searchParams.get('ASIN');
+      if (asin && /^[A-Z0-9]{10}$/i.test(asin)) return {key: 'amazon', value: asin.toUpperCase()};
+      const walmart = u.searchParams.get('w') || u.searchParams.get('walmartId');
+      if (walmart && /^\d+$/.test(walmart)) return {key: 'walmart', value: walmart};
+    }
+
+    if (host.includes('amazon.')) {
+      // /dp/{ASIN} or /gp/product/{ASIN} or ?ASIN.1=...
+      let m = path.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/i);
+      if (!m) m = u.searchParams.get('ASIN.1') ? [null, u.searchParams.get('ASIN.1')] : null;
+      if (!m) { const a = u.searchParams.get('a') || u.searchParams.get('asin'); if (a && /^[A-Z0-9]{10}$/i.test(a)) m = [null, a]; }
+      if (m) return {key: 'amazon', value: m[1].toUpperCase()};
+    }
+    if (host.includes('walmart.')) {
+      // /ip/slug/ITEMID or /cart/add?items=ITEMID
+      let m = path.match(/\/ip\/[^/]+\/(\d+)/);
+      if (!m) m = path.match(/\/ip\/(\d+)/);
+      if (!m) { const v = u.searchParams.get('items'); if (v) m = [null, v]; }
+      if (m) return {key: 'walmart', value: m[1]};
+    }
+    if (host.includes('bestbuy.')) {
+      // /site/.../{SKU}.p
+      const m = path.match(/\/(\d{6,10})\.p/);
+      if (m) return {key: 'bestbuy', value: m[1]};
+    }
+    if (host.includes('target.')) {
+      // /p/.../-/A-{TCIN}
+      const m = path.match(/\/A-(\d+)/);
+      if (m) return {key: 'target', value: m[1]};
+    }
+  } catch {}
+  return null;
+}
+
+function _hubAutoFillRetailerIds(entry) {
+  // Scan matched deal sighting URLs + checkout URLs for retailer IDs.
+  // Only fills fields that are currently empty AND not in the ignore list.
+  const existing = entry.retailer_product_ids || {};
+  const ignored  = entry.ignored_retailer_ids || {};
+  const matched  = _hubMatchedDeals(entry);
+  const found = {};
+
+  const activeIds = _extractIdsFromDeals(matched);
+  for (const [key, valSet] of activeIds) {
+    for (const value of valSet) {
+      if (!existing[key] && !found[key] && !(ignored[key] || []).includes(value)) {
+        found[key] = value;
+        break; // take first valid value per retailer
+      }
+    }
+  }
+
+  if (!Object.keys(found).length) return found;
+
+  // Highlight auto-filled inputs
+  for (const [key, value] of Object.entries(found)) {
+    const input = document.getElementById(`hub-pid-${key}-${entry.id}`);
+    if (input && !input.value.trim()) {
+      input.value = value;
+      input.style.borderColor = 'var(--accent)';
+    }
+  }
+
+  // Save only genuinely new IDs (don't overwrite existing, don't save empty)
+  for (const [key, value] of Object.entries(found)) {
+    if (!existing[key]) saveHubProductId(entry.id, key, value);
+  }
+  return found;
+}
+
+function _extractIdsFromDeals(deals) {
+  // Returns Map<retailerKey, Set<value>> for all IDs parseable from the given deals.
+  const map = new Map();
+  const add = (urlStr) => {
+    const r = _parseRetailerIdFromUrl(urlStr);
+    if (!r) return;
+    if (!map.has(r.key)) map.set(r.key, new Set());
+    map.get(r.key).add(r.value);
+  };
+  for (const d of deals) {
+    for (const cu of (d.checkout_urls || [])) add(cu.url || '');
+    for (const s of (d.sightings || [])) {
+      add(s.url || '');
+      for (const cu of (s.checkout_urls || [])) add(cu.url || '');
+    }
+    for (const e of (d.embeds || [])) add(e.url || '');
+  }
+  return map;
+}
+
+async function retryHubAutoFill(entryId) {
+  const btn = document.querySelector(`[onclick="retryHubAutoFill('${entryId}')"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '↻ Scanning…'; }
+  const entry = productsHub.find(e => e.id === entryId);
+  if (!entry) return;
+
+  // IDs available in currently-active matched deals
+  const activeDeals = _hubMatchedDeals(entry);
+  const activeIds   = _extractIdsFromDeals(activeDeals);
+
+  // IDs present in excluded deals (may be stale)
+  const excludedDeals = trackedDeals.filter(d => (entry.excluded_deal_ids || []).includes(d.id));
+  const excludedIds   = _extractIdsFromDeals(excludedDeals);
+
+  // Unmap any existing ID whose only source was an excluded deal
+  const unmapped = [];
+  for (const [key, currentVal] of Object.entries(entry.retailer_product_ids || {})) {
+    if (!currentVal) continue;
+    const inActive   = (activeIds.get(key)   || new Set()).has(currentVal);
+    const inExcluded = (excludedIds.get(key) || new Set()).has(currentVal);
+    if (inExcluded && !inActive) {
+      unmapped.push(key);
+      saveHubProductId(entryId, key, ''); // clear it
+    }
+  }
+
+  // Fill any new IDs from active deals (respects ignore list + existing)
+  const found = _hubAutoFillRetailerIds(entry) || {};
+
+  // Reload the links tab after saves propagate
+  await new Promise(r => setTimeout(r, 600));
+  const fresh = productsHub.find(e => e.id === entryId);
+  if (fresh && _hubDetailTab === 'links') {
+    const p = (fresh.tcgplayer_index != null) ? appState.products[fresh.tcgplayer_index] : null;
+    const el = document.getElementById('hub-detail-content');
+    if (el) { el.innerHTML = _hubDetailLinksHTML(fresh, p); _hubAutoFillRetailerIds(fresh); }
+    // Show result banner
+    const parts = [];
+    if (unmapped.length) parts.push(`Unmapped (excluded deal): ${unmapped.join(', ')}`);
+    if (Object.keys(found).length) parts.push(`Auto-filled: ${Object.entries(found).map(([k,v])=>`${k} → ${v}`).join(', ')}`);
+    const msg = parts.length ? parts.join(' · ') : 'No changes — no new IDs found in active deals';
+    const info = document.createElement('div');
+    info.style.cssText = 'font-size:11px;padding:6px 10px;border-radius:6px;margin-bottom:8px;' +
+      (parts.length ? 'background:rgba(34,197,94,.12);color:#4ade80' : 'background:rgba(255,255,255,.05);color:var(--muted)');
+    info.textContent = msg;
+    const subtitleEls = el.querySelectorAll('[style*="margin-bottom:10px"]');
+    if (subtitleEls.length) subtitleEls[0].insertAdjacentElement('afterend', info);
   }
 }
 
@@ -6906,13 +7964,22 @@ function clearDiscordFeed() {
   searchDiscordLog();
 }
 
-let _discordCollapsed = false;
+let _discordCollapsed = true;
 
 function toggleDiscordCollapse() {
   _discordCollapsed = !_discordCollapsed;
-  document.getElementById('discord-log-search').style.display = _discordCollapsed ? 'none' : '';
-  document.getElementById('discord-collapse-btn').textContent = _discordCollapsed ? 'Show' : 'Hide';
+  _applyDiscordCollapse();
 }
+
+function _applyDiscordCollapse() {
+  const logSearch = document.getElementById('discord-log-search');
+  const btn = document.getElementById('discord-collapse-btn');
+  if (logSearch) logSearch.style.display = _discordCollapsed ? 'none' : '';
+  if (btn) btn.textContent = _discordCollapsed ? 'Show' : 'Hide';
+}
+
+// Apply collapsed state immediately on load
+document.addEventListener('DOMContentLoaded', _applyDiscordCollapse);
 
 function notifyDiscordPost(post) {
   // Desktop notifications disabled — using Discord DM notifications instead

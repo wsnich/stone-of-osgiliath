@@ -477,6 +477,9 @@ class ProductEntry:
     retailer_urls: list[RetailerLink] = field(default_factory=list)
     tcgplayer_index: Optional[int] = None             # links to TCGPlayer tab item
     deal_ids: list[str] = field(default_factory=list)  # links to tracked deals
+    retailer_product_ids: dict = field(default_factory=dict)  # {amazon: ASIN, walmart: itemId, bestbuy: SKU, target: TCIN}
+    excluded_deal_ids: list[str] = field(default_factory=list)  # explicitly excluded from auto-match
+    ignored_retailer_ids: dict = field(default_factory=dict)    # {retailer_key: [value, ...]} — never auto-fill these
 
     def to_dict(self) -> dict:
         d = {
@@ -487,6 +490,9 @@ class ProductEntry:
             "retailer_urls": [r.to_dict() for r in self.retailer_urls],
             "tcgplayer_index": self.tcgplayer_index,
             "deal_ids": self.deal_ids,
+            "retailer_product_ids": self.retailer_product_ids,
+            "excluded_deal_ids": self.excluded_deal_ids,
+            "ignored_retailer_ids": self.ignored_retailer_ids,
         }
         return d
 
@@ -501,6 +507,9 @@ class ProductEntry:
             retailer_urls=urls,
             tcgplayer_index=d.get("tcgplayer_index"),
             deal_ids=d.get("deal_ids", []),
+            retailer_product_ids=d.get("retailer_product_ids", {}),
+            excluded_deal_ids=d.get("excluded_deal_ids", []),
+            ignored_retailer_ids=d.get("ignored_retailer_ids", {}),
         )
 
 
