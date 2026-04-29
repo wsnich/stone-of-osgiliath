@@ -5277,7 +5277,7 @@ function renderOverview() {
 
   if (filteredTimingRetailers.length) {
     // Hour-of-day heatmap
-    timingHTML += `<div style="font-size:10px;color:var(--muted);margin-bottom:6px">Hour of Day (UTC) — darker = more sightings</div>`;
+    timingHTML += `<div style="font-size:10px;color:var(--muted);margin-bottom:6px">Hour of Day (UTC) — brighter = more sightings</div>`;
     timingHTML += `<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:9px;width:100%">`;
     timingHTML += `<tr><td style="padding:2px 4px;font-weight:700;color:var(--muted)">Retailer</td>`;
     for (let h = 0; h < 24; h++) timingHTML += `<td style="padding:2px 3px;text-align:center;color:var(--muted)">${h}</td>`;
