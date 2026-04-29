@@ -1652,6 +1652,11 @@ select.form-input option { background: var(--surface2); }
     <span style="display:block;font-size:9px;font-weight:400;color:var(--muted);letter-spacing:0.05em;margin-top:-2px">That Which Looks Far Away</span>
   </div>
   <div class="header-spacer"></div>
+  <a id="update-badge" href="https://github.com/wsnich/stone-of-osgiliath/commits/main" target="_blank"
+     title="A newer version is available on GitHub"
+     style="display:none;align-items:center;gap:5px;background:var(--surface3);border:1px solid var(--yellow);border-radius:999px;padding:3px 10px;font-size:11px;color:var(--yellow);text-decoration:none;cursor:pointer;white-space:nowrap">
+    &#8679; Update available
+  </a>
   <div class="status-pill" id="countdown-pill" style="display:none">
     <span style="color:var(--muted);font-size:11px">next check</span>
     <span id="countdown-text" style="color:var(--yellow);font-variant-numeric:tabular-nums">—</span>
@@ -4078,6 +4083,26 @@ async function loadTcgTrends() {
 // Load trends on startup and periodically
 loadTcgTrends();
 setInterval(loadTcgTrends, 300000); // refresh every 5 min
+
+// ── Update check ────────────────────────────────────────────────
+async function checkForUpdate() {
+  try {
+    const [localRes, remoteRes] = await Promise.all([
+      fetch('/api/version'),
+      fetch('https://api.github.com/repos/wsnich/stone-of-osgiliath/commits/main',
+            { headers: { 'Accept': 'application/vnd.github.v3+json' } }),
+    ]);
+    if (!localRes.ok || !remoteRes.ok) return;
+    const local  = await localRes.json();
+    const remote = await remoteRes.json();
+    if (local.sha === 'unknown') return;
+    if (remote.sha && remote.sha !== local.sha) {
+      document.getElementById('update-badge').style.display = 'flex';
+    }
+  } catch {}
+}
+checkForUpdate();
+setInterval(checkForUpdate, 3600000); // re-check every hour
 
 function _trendBadge(pct, label) {
   if (pct == null) return '';

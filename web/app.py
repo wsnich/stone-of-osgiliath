@@ -910,6 +910,32 @@ async def cache_image(url: str) -> Optional[str]:
         pass
     return None
 
+@app.get("/api/version")
+async def get_version():
+    """Return the current git commit SHA so the UI can check for updates."""
+    sha = "unknown"
+    try:
+        import subprocess
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).parent.parent,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        # Fallback: read .git files directly (no git binary needed)
+        try:
+            head_file = Path(__file__).parent.parent / ".git" / "HEAD"
+            ref = head_file.read_text().strip()
+            if ref.startswith("ref: "):
+                ref_path = Path(__file__).parent.parent / ".git" / ref[5:]
+                sha = ref_path.read_text().strip()
+            else:
+                sha = ref
+        except Exception:
+            pass
+    return {"sha": sha, "short": sha[:7] if sha != "unknown" else "unknown"}
+
+
 @app.get("/api/setup-status")
 async def setup_status():
     """Check if the app needs initial setup."""
