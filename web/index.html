@@ -1813,6 +1813,9 @@ select.form-input option { background: var(--surface2); }
           Discord <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9660;</span>
         </div>
         <div class="settings-body" style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="font-size:11px;color:var(--muted);line-height:1.5">
+            The app logs into Discord as you in a hidden browser window and watches deal channels in real-time. Your credentials are only used to open that browser session — they're never sent anywhere else. The <strong style="color:var(--text)">Bot Token</strong> is separate and only needed if you want push notifications sent to your phone via DM.
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
               <label class="form-label">Discord Email</label>
@@ -1844,6 +1847,9 @@ select.form-input option { background: var(--surface2); }
           Monitor &amp; Schedule <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
         <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="font-size:11px;color:var(--muted);line-height:1.5">
+            Controls how often sealed products are price-checked (singles are fixed at 6 hrs, graded at the interval below). <strong style="color:var(--text)">Jitter</strong> adds a small random offset so all products don't fire at the same time. <strong style="color:var(--text)">Active hours</strong> pauses all checks outside the window you set — useful if you don't want the browser running overnight.
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
               <label class="form-label">Check Interval (seconds)</label>
@@ -1874,6 +1880,9 @@ select.form-input option { background: var(--surface2); }
           Browser <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
         <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="font-size:11px;color:var(--muted);line-height:1.5">
+            The app uses a real Chromium browser (via Patchright) to scrape TCGPlayer, eBay, and Discord — it looks like a normal user visit. Leave these on defaults unless you're having detection or timeout issues. <strong style="color:var(--text)">Headless mode</strong> keeps the browser window hidden; disable it if you need to watch what the browser is doing to debug a problem.
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
               <label class="form-label">User Agent</label>
@@ -1910,6 +1919,9 @@ select.form-input option { background: var(--surface2); }
           Reddit <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
         <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="font-size:11px;color:var(--muted);line-height:1.5">
+            Polls the <em>new</em> feed of any subreddits you list and surfaces posts in the Reddit panel at the top of the page. No Reddit account needed — it uses the public JSON API. Good sources: <code style="background:var(--surface3);padding:1px 4px;border-radius:3px">sealedmtgdeals</code>, <code style="background:var(--surface3);padding:1px 4px;border-radius:3px">mtgfinance</code>, <code style="background:var(--surface3);padding:1px 4px;border-radius:3px">pokemontcg</code>.
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
               <label class="form-label">Subreddits <span style="color:var(--muted);font-weight:400">comma-separated</span></label>
@@ -1928,6 +1940,9 @@ select.form-input option { background: var(--surface2); }
           Research Agent <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
         <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="font-size:11px;color:var(--muted);line-height:1.5">
+            An AI agent (Claude) that periodically reviews your price history, eBay sold comps, and Discord deal data to surface trends and anomalies. Results appear in the <strong style="color:var(--text)">Research</strong> tab. Requires an Anthropic API key — runs cost a few cents each. Set the interval to 168 hours (weekly) to keep costs minimal.
+          </div>
           <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px;cursor:pointer">
             <input type="checkbox" id="set-research-enabled"> Enable scheduled research runs
           </label>
@@ -1958,6 +1973,9 @@ select.form-input option { background: var(--surface2); }
           Data <span class="settings-chevron" style="font-size:8px;transition:transform 0.15s">&#9654;</span>
         </div>
         <div class="settings-body" style="display:none;flex-direction:column;gap:8px;padding-top:8px">
+          <div style="font-size:11px;color:var(--muted);line-height:1.5">
+            All app data (price history database, saved state, deals, portfolio) is stored in a single folder. By default this is the project root next to <code style="background:var(--surface3);padding:1px 4px;border-radius:3px">main.py</code>. Set a custom path if you want to keep data on a separate drive or shared folder. Changes require a restart.
+          </div>
           <div>
             <label class="form-label">Data Directory <span style="color:var(--muted);font-weight:400">(blank = project root, requires restart)</span></label>
             <input type="text" class="form-input" id="set-data-dir" placeholder="Default (project root)" style="font-size:10px">
