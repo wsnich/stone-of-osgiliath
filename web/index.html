@@ -4181,29 +4181,32 @@ function _hubAtcRetailerEnabled(entryId, retailer) {
 // (window.open from a WS callback is blocked by browsers; user must click)
 function _hubFireAtcTriggers(newDealId, prevSightingCount) {
   // prevSightingCount: number of sightings the deal had BEFORE this update
-  // used to detect which sightings are newly added so we can check their retailers
+  console.log(`[ATC] trigger fired: dealId=${newDealId} prevSightings=${prevSightingCount} hubEntries=${hubEntries.length}`);
   const alerts = [];
   for (const entry of hubEntries) {
     const s = _hubAtcSettings(entry.id);
     if (!s.enabled) continue;
     const matched = _hubMatchedDeals(entry);
     const deal = matched.find(d => d.id === newDealId);
-    if (!deal) continue;
+    if (!deal) {
+      console.log(`[ATC] "${entry.name}": deal ${newDealId} not in matched (${matched.length} matched deals)`);
+      continue;
+    }
 
-    // Check that at least one new sighting is from a canonical retailer.
-    // This prevents silent no-op triggers from Refract/no-ATC sightings.
     const newSightings = (deal.sightings || []).slice(prevSightingCount ?? 0);
-    const hasCanonicalNewSighting = newSightings.length === 0 // brand-new deal, no prior sightings
+    const hasCanonicalNewSighting = newSightings.length === 0
       || newSightings.some(ns => _canonicalRetailer(ns.retailer) !== null);
-    if (!hasCanonicalNewSighting) continue;
+    if (!hasCanonicalNewSighting) {
+      console.log(`[ATC] "${entry.name}": new sightings are all non-canonical retailers`, newSightings.map(s=>s.retailer));
+      continue;
+    }
 
-    // Pull ATC from ALL matched deals, not just the one that got the sighting.
-    // A new Refract Amazon sighting might not have ATC links, but a sibling
-    // Zephr deal for the same product will.
     const groups = _hubAtcByRetailer(matched);
     const enabledGroups = groups.filter(({retailer, urls}) => urls.length && _hubAtcRetailerEnabled(entry.id, retailer));
+    console.log(`[ATC] "${entry.name}": groups=${JSON.stringify(groups.map(g=>({retailer:g.retailer,urls:g.urls.length})))} enabled=${enabledGroups.length}`);
     if (enabledGroups.length) alerts.push({entry, deal, groups: enabledGroups});
   }
+  console.log(`[ATC] total alerts to show: ${alerts.length}`);
   if (!alerts.length) return;
 
   const container = document.getElementById('hub-atc-alerts');
@@ -4291,15 +4294,16 @@ function _canonicalRetailer(raw) {
 
 function _hubAtcByRetailer(matchedDeals) {
   // Returns [{retailer, urls:[{url,label}]}] — one entry per canonical retailer.
-  // Uses only the MOST RECENT sighting that has checkout_urls for each retailer,
-  // so the count reflects distinct quantity options (1,2,4…) not historical cart tokens.
+  // Uses the MOST RECENT sighting with checkout_urls for each retailer
+  // (iterate newest-first so first match = freshest token).
   const map = {};  // canonicalRetailer -> [{url, label}]
   for (const d of matchedDeals) {
-    for (const s of (d.sightings || [])) {
+    const sightings = (d.sightings || []).slice().reverse(); // newest first
+    for (const s of sightings) {
       if (!(s.checkout_urls && s.checkout_urls.length)) continue;
       const canonical = _canonicalRetailer(s.retailer);
       if (!canonical) continue;        // skip third-party / unknown retailers
-      if (map[canonical]) continue;    // already captured a more-recent sighting
+      if (map[canonical]) continue;    // already have a newer sighting for this retailer
       map[canonical] = s.checkout_urls.slice(0, 6).map(cu => ({url: cu.url, label: cu.label || 'ATC'}));
     }
   }
@@ -5067,7 +5071,7 @@ function _extractIdsFromDeals(deals) {
 async function retryHubAutoFill(entryId) {
   const btn = document.querySelector(`[onclick="retryHubAutoFill('${entryId}')"]`);
   if (btn) { btn.disabled = true; btn.textContent = '↻ Scanning…'; }
-  const entry = productsHub.find(e => e.id === entryId);
+  const entry = hubEntries.find(e => e.id === entryId);
   if (!entry) return;
 
   // IDs available in currently-active matched deals
@@ -5095,7 +5099,7 @@ async function retryHubAutoFill(entryId) {
 
   // Reload the links tab after saves propagate
   await new Promise(r => setTimeout(r, 600));
-  const fresh = productsHub.find(e => e.id === entryId);
+  const fresh = hubEntries.find(e => e.id === entryId);
   if (fresh && _hubDetailTab === 'links') {
     const p = (fresh.tcgplayer_index != null) ? appState.products[fresh.tcgplayer_index] : null;
     const el = document.getElementById('hub-detail-content');
@@ -5656,22 +5660,25 @@ async function loadHistogramTrend(index) {
   try {
     const res = await fetch(`/api/tcg-history/${index}/listing-snapshots?days=90`);
     const data = await res.json();
+    // trend_stats: lightweight [{checked_at, median, low, listings}] for ALL snapshots
+    // snapshots:   full listing_prices thinned to <=500 for the playback slider
+    const trendStats = data.trend_stats || [];
     const snaps = (data.snapshots || []).filter(s => s.listing_prices && s.listing_prices.length);
-    if (!snaps.length) return;
+    if (!trendStats.length && !snaps.length) return;
 
     _histogramSnapshots = snaps;
 
-    // If no live listing_prices, render the latest snapshot's histogram
+    // If no live listing_prices, render the latest snapshot histogram
     const p = products[index];
-    if (!p?.listing_prices?.length) {
+    if (!p?.listing_prices?.length && snaps.length) {
       const latest = snaps[snaps.length - 1];
       renderHistogramData(latest.listing_prices);
     }
 
-    // Compute global bins for playback
-    _histogramGlobalBins = computeGlobalBins(snaps);
+    // Compute global bins for playback (only over thinned set)
+    if (snaps.length) _histogramGlobalBins = computeGlobalBins(snaps);
 
-    // Show playback controls if we have multiple snapshots
+    // Show playback controls
     if (snaps.length > 1) {
       const slider = document.getElementById('hist-slider');
       slider.max = snaps.length - 1;
@@ -5679,19 +5686,17 @@ async function loadHistogramTrend(index) {
       _histogramSnapIndex = snaps.length - 1;
       document.getElementById('histogram-history-controls').style.display = '';
       document.getElementById('hist-date-label').textContent = 'Latest';
-      document.getElementById('hist-frame-counter').textContent = `${snaps.length} snapshots`;
+      document.getElementById('hist-frame-counter').textContent = `${trendStats.length} snapshots`;
     }
 
-    // Build trend data from snapshots
+    // Build trend chart data from server-pre-computed stats (no JS computation needed)
     const trendLabels = [];
     const medianData = [];
     const lowData = [];
     const listingsData = [];
 
-    for (const snap of snaps) {
-      const st = _snapStats(snap.listing_prices);
-      if (!st) continue;
-      const dt = new Date(snap.checked_at.replace(' ', 'T'));
+    for (const st of trendStats) {
+      const dt = new Date(st.checked_at.replace(' ', 'T'));
       trendLabels.push(dt.toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}));
       medianData.push(st.median);
       lowData.push(st.low);

@@ -2070,19 +2070,67 @@ async def get_tcg_stats(index: int):
     stats = await price_db.get_tcg_stats(ps.url)
     return {"product": ps.name, **stats}
 
+def _snap_stats(listing_prices: list) -> dict | None:
+    """Mirror of the JS _snapStats: IQR-filtered low, median, and listing count."""
+    totals = sorted(
+        l.get("total") or l.get("price") or 0
+        for l in listing_prices
+        if (l.get("total") or l.get("price") or 0) > 0
+    )
+    if not totals:
+        return None
+    n = len(totals)
+    q1 = totals[int(n * 0.25)]
+    q3 = totals[int(n * 0.75)]
+    iqr = q3 - q1
+    fence = q3 + 3 * max(iqr, q1 * 0.5)
+    filtered = [t for t in totals if t <= fence] or totals
+    return {
+        "low":      round(filtered[0], 2),
+        "median":   round(filtered[len(filtered) // 2], 2),
+        "listings": len(listing_prices),
+    }
+
+
 @app.get("/api/tcg-history/{index}/listing-snapshots")
 async def get_listing_snapshots(index: int, days: int = 90):
     if index < 0 or index >= len(app_state.product_statuses):
         raise HTTPException(status_code=404, detail="Product not found")
     ps = app_state.product_statuses[index]
     rows = await price_db.get_tcg_listing_snapshots(ps.url, days=days)
+
+    # Parse listing JSON once per row
+    parsed = []
     for r in rows:
         try:
-            r["listing_prices"] = json.loads(r.pop("listing_prices_json"))
+            prices = json.loads(r["listing_prices_json"])
         except Exception:
-            r["listing_prices"] = []
-            r.pop("listing_prices_json", None)
-    return {"product": ps.name, "snapshots": rows}
+            prices = []
+        parsed.append({"checked_at": r["checked_at"], "listing_prices": prices})
+
+    # trend_stats: lightweight (checked_at + 3 numbers) for ALL snapshots — used by the
+    # trend/line chart.  Sent for every snapshot so the chart stays smooth regardless of
+    # how many full-data snapshots we include.
+    trend_stats = []
+    for p in parsed:
+        st = _snap_stats(p["listing_prices"])
+        if st:
+            trend_stats.append({"checked_at": p["checked_at"], **st})
+
+    # snapshots: full listing_prices, thinned to ≤500 entries for the playback slider.
+    # Always include the most-recent snapshot; sample the rest evenly.
+    MAX_PLAYBACK = 500
+    if len(parsed) <= MAX_PLAYBACK:
+        thin = parsed
+    else:
+        step = len(parsed) / MAX_PLAYBACK
+        thin = [parsed[int(i * step)] for i in range(MAX_PLAYBACK - 1)]
+        thin.append(parsed[-1])  # always include latest
+
+    # Drop empty snapshots from playback set
+    snapshots = [s for s in thin if s["listing_prices"]]
+
+    return {"product": ps.name, "trend_stats": trend_stats, "snapshots": snapshots}
 
 # ------------------------------------------------------------------
 # Portfolio
