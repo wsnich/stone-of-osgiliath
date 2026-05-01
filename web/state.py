@@ -578,6 +578,7 @@ class AppState:
         self.ws = ConnectionManager()
         self._monitor_task: Optional[asyncio.Task] = None
         self._reddit_task: Optional[asyncio.Task] = None
+        self._discord_task: Optional[asyncio.Task] = None  # never cancelled by stop_monitor
         self.force_refresh_categories: set = set()  # {"single", "comic", "tcgplayer"}
 
     async def log(self, level: str, message: str, source: str = "system") -> None:

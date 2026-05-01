@@ -159,7 +159,7 @@ class EbayMonitor:
 
         if category == "comic":
             # Use 130point.com for comics — better data, more marketplaces
-            raw_sold, raw_live = await self._fetch_130point(query, max_results=200)
+            raw_sold, raw_live = await self._fetch_130point(query, max_results=200, stealth_cfg=stealth_cfg)
 
             # Post-filter both lists by key terms
             must_match = []
@@ -231,7 +231,7 @@ class EbayMonitor:
     # 130point.com scraper (comics — replaces direct eBay for better data)
     # ------------------------------------------------------------------
 
-    async def _fetch_130point(self, query: str, max_results: int) -> tuple[list[dict], list[dict]]:
+    async def _fetch_130point(self, query: str, max_results: int, stealth_cfg: dict | None = None) -> tuple[list[dict], list[dict]]:
         """
         Search 130point.com for sold AND live comic listings.
         Requires headless=False due to Cloudflare protection.
@@ -252,11 +252,15 @@ class EbayMonitor:
             import asyncio as _aio
             async with _pw() as pw:
                 browser = None
+                from monitors.defaults import playwright_proxy
+                _proxy = playwright_proxy(stealth_cfg)
                 for channel in ("chrome", "msedge", None):
                     try:
                         kw = {"headless": False}
                         if channel:
                             kw["channel"] = channel
+                        if _proxy:
+                            kw["proxy"] = _proxy
                         browser = await pw.chromium.launch(**kw)
                         break
                     except Exception:

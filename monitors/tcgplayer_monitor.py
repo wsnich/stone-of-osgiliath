@@ -68,7 +68,7 @@ class TCGPlayerMonitor:
         market_price, low_price, quantity, image_url, listing_prices, tcg_sales, price_history = await self._fetch_via_browser(url, name, stealth_cfg)
 
         if market_price is None and low_price is None:
-            quantity = quantity or await self._fetch_quantity_api(url)
+            quantity = quantity or await self._fetch_quantity_api(url, stealth_cfg)
             log.warning(f"{name}: could not extract TCGPlayer pricing")
             return ProductResult(
                 name=name, url=url, price=None,
@@ -178,6 +178,10 @@ class TCGPlayerMonitor:
                 channel = get_browser_channel(stealth_cfg)
                 if channel:
                     launch_kw["channel"] = channel
+                from monitors.defaults import playwright_proxy
+                proxy = playwright_proxy(stealth_cfg)
+                if proxy:
+                    launch_kw["proxy"] = proxy
                 browser = await pw.chromium.launch(**launch_kw)
                 context = await browser.new_context(
                     user_agent=get_user_agent(stealth_cfg),
@@ -545,7 +549,7 @@ class TCGPlayerMonitor:
 
         return market, low, qty
 
-    async def _fetch_quantity_api(self, url: str) -> Optional[int]:
+    async def _fetch_quantity_api(self, url: str, stealth_cfg: dict | None = None) -> Optional[int]:
         """Fallback: get totalResults count via simple POST API."""
         product_id = self._extract_product_id(url)
         if not product_id:
@@ -554,7 +558,9 @@ class TCGPlayerMonitor:
         body = {"mpfev": 3, "channel": 0, "language": 1, "start": 0, "rows": 1}
         try:
             from curl_cffi.requests import AsyncSession
-            async with AsyncSession(impersonate="chrome124") as s:
+            from monitors.defaults import get_proxy
+            _proxy = get_proxy(stealth_cfg)
+            async with AsyncSession(impersonate="chrome124", proxy=_proxy) as s:
                 r = await s.post(api_url, json=body, timeout=10,
                                  headers={
                                      "User-Agent":   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",

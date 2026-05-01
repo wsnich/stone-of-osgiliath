@@ -844,6 +844,7 @@ async def lifespan(app: FastAPI):
 
     app_state._monitor_task = task
     app_state._reddit_task  = reddit_task
+    app_state._discord_task = discord_task   # tracked separately — never cancelled by stop_monitor
     yield
     app_state.save_to_disk()
     deal_tracker.save_to_disk()
@@ -981,10 +982,13 @@ async def start_monitor():
 
 @app.post("/api/monitor/stop")
 async def stop_monitor():
+    # Stops ONLY the product-check loop. Discord gateway is a separate task
+    # (app_state._discord_task) and must never be cancelled here.
     app_state.monitor_running = False
     app_state.sleeping        = False
     if app_state._monitor_task:
         app_state._monitor_task.cancel()
+        app_state._monitor_task = None
     await app_state.ws.broadcast({"type": "monitor_status", "data": {"running": False, "sleeping": False}})
     return {"status": "stopped"}
 
@@ -1902,6 +1906,7 @@ async def get_settings():
         "headless":              stealth.get("headless", True),
         "user_agent":            stealth.get("user_agent") or "",
         "browser_channel":       stealth.get("browser_channel") or "",
+        "proxy":                 stealth.get("proxy") or "",
         "page_timeout_ms":       stealth.get("page_timeout_ms", 30000),
         "network_timeout_seconds": stealth.get("network_timeout_seconds", 15),
         "schedule_enabled":      schedule.get("enabled", False),
@@ -1936,6 +1941,8 @@ async def update_settings(body: dict):
         s["user_agent"] = body["user_agent"].strip() or None
     if "browser_channel" in body:
         s["browser_channel"] = body["browser_channel"].strip() or None
+    if "proxy" in body:
+        s["proxy"] = body["proxy"].strip() or None
     if "page_timeout_ms" in body:
         s["page_timeout_ms"] = max(5000, int(body["page_timeout_ms"]))
     if "network_timeout_seconds" in body:

@@ -1718,8 +1718,8 @@ select.form-input option { background: var(--surface2); }
     <div class="status-dot" id="status-dot"></div>
     <span id="status-text">Connecting…</span>
   </div>
-  <button class="btn btn-stop btn-sm" id="btn-stop"  onclick="controlMonitor('stop')" style="display:none">■ Stop</button>
-  <button class="btn btn-start btn-sm" id="btn-start" onclick="controlMonitor('start')" style="display:none">▶ Start</button>
+  <button class="btn btn-stop btn-sm" id="btn-stop"  onclick="controlMonitor('stop')" style="display:none" title="Pause price checks (Discord feed keeps running)">■ Pause Checks</button>
+  <button class="btn btn-start btn-sm" id="btn-start" onclick="controlMonitor('start')" style="display:none" title="Resume price checks">▶ Resume Checks</button>
   <button class="btn btn-ghost btn-sm" onclick="openRefreshInfoModal()" title="How refresh timing works" style="font-size:13px;padding:4px 8px;line-height:1">&#9432;</button>
   <button class="btn btn-ghost btn-sm" onclick="openSettingsModal()" title="Settings" style="font-size:14px;padding:4px 8px;margin-left:2px">&#9881;</button>
 </header>
@@ -1954,6 +1954,11 @@ select.form-input option { background: var(--surface2); }
                 <option value="msedge">Microsoft Edge</option>
               </select>
             </div>
+          </div>
+          <div>
+            <label class="form-label">Proxy</label>
+            <input type="text" class="form-input" id="set-proxy" placeholder="e.g. socks5://host:1080 or http://user:pass@host:port" style="font-size:11px">
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">Applied to all TCGPlayer and eBay browser checks. Leave blank to use your direct connection.</div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
@@ -3395,6 +3400,7 @@ async function openSettingsModal() {
   document.getElementById('set-headless').checked = data.headless !== false;
   document.getElementById('set-user-agent').value = data.user_agent || '';
   document.getElementById('set-browser-channel').value = data.browser_channel || '';
+  document.getElementById('set-proxy').value = data.proxy || '';
   document.getElementById('set-page-timeout').value = data.page_timeout_ms || 30000;
   document.getElementById('set-network-timeout').value = data.network_timeout_seconds || 15;
   document.getElementById('set-schedule-enabled').checked = data.schedule_enabled || false;
@@ -3475,6 +3481,7 @@ async function saveSettingsModal() {
     headless: document.getElementById('set-headless').checked,
     user_agent: document.getElementById('set-user-agent').value.trim(),
     browser_channel: document.getElementById('set-browser-channel').value,
+    proxy: document.getElementById('set-proxy').value.trim(),
     page_timeout_ms: parseInt(document.getElementById('set-page-timeout').value) || 30000,
     network_timeout_seconds: parseInt(document.getElementById('set-network-timeout').value) || 15,
     schedule_enabled: document.getElementById('set-schedule-enabled').checked,
@@ -6009,11 +6016,15 @@ function histogramPlayPause() {
   if (_histogramPlayTimer) {
     histogramStopPlay();
   } else {
+    // If at the end, rewind to the beginning first
+    if (_histogramSnapIndex >= _histogramSnapshots.length - 1) {
+      renderHistogramFrame(0);
+    }
     document.getElementById('hist-play-btn').textContent = '⏸ Pause';
     _histogramPlayTimer = setInterval(() => {
       if (_histogramSnapIndex >= _histogramSnapshots.length - 1) { histogramStopPlay(); return; }
       renderHistogramFrame(_histogramSnapIndex + 1);
-    }, 800);
+    }, 200);
   }
 }
 

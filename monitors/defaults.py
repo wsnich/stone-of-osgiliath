@@ -35,3 +35,22 @@ def get_browser_channel(stealth_cfg: dict | None = None) -> str | None:
     if stealth_cfg and stealth_cfg.get("browser_channel"):
         return stealth_cfg["browser_channel"]
     return None
+
+
+def get_proxy(stealth_cfg: dict | None = None) -> str | None:
+    """Return proxy URL string or None.  Supports http://, https://, socks5://.
+    Example config values:
+        "http://user:pass@host:port"
+        "socks5://host:1080"
+    """
+    if stealth_cfg and stealth_cfg.get("proxy"):
+        return stealth_cfg["proxy"] or None
+    return None
+
+
+def playwright_proxy(stealth_cfg: dict | None = None) -> dict | None:
+    """Return a Playwright-compatible proxy dict or None."""
+    url = get_proxy(stealth_cfg)
+    if not url:
+        return None
+    return {"server": url}

@@ -11,7 +11,8 @@
     "user_agent": null,
     "browser_channel": null,
     "page_timeout_ms": 30000,
-    "network_timeout_seconds": 15
+    "network_timeout_seconds": 15,
+    "proxy": null
   },
 
   "schedule": {
