@@ -178,11 +178,19 @@ class TCGPlayerMonitor:
                 channel = get_browser_channel(stealth_cfg)
                 if channel:
                     launch_kw["channel"] = channel
-                from monitors.defaults import playwright_proxy, mark_proxy_bad
+                from monitors.defaults import playwright_proxy, mark_proxy_bad, get_proxy
                 proxy = playwright_proxy(stealth_cfg)
                 _proxy_url = proxy["server"] if proxy else None
                 if proxy:
-                    launch_kw["proxy"] = proxy
+                    raw_url = get_proxy(stealth_cfg) or ""
+                    if raw_url.startswith("socks5://") and proxy.get("username"):
+                        # Chromium can't do SOCKS5 with auth — use local forwarder
+                        from monitors.proxy_forwarder import start_local_proxy
+                        local_port = await start_local_proxy(raw_url)
+                        launch_kw["proxy"] = {"server": f"socks5://127.0.0.1:{local_port}"}
+                        _proxy_url = raw_url  # keep for error reporting
+                    else:
+                        launch_kw["proxy"] = proxy
                 browser = await pw.chromium.launch(**launch_kw)
                 context = await browser.new_context(
                     user_agent=get_user_agent(stealth_cfg),
