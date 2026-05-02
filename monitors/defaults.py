@@ -77,12 +77,15 @@ def _parse_proxy_list(raw) -> list[str]:
         e = e.strip()
         if not e:
             continue
-        # Convert host:port:user:pass → http://user:pass@host:port
+        # Convert host:port:user:pass → scheme://user:pass@host:port
+        # Detect SOCKS5 by common ports (9595, 1080) otherwise assume HTTP
+        _SOCKS5_PORTS = {"9595", "1080", "1081", "9050"}
         if not e.startswith(("http://", "https://", "socks5://", "socks4://")):
             parts = e.split(":")
             if len(parts) == 4:
                 host, port, user, password = parts
-                e = f"http://{user}:{password}@{host}:{port}"
+                scheme = "socks5" if port in _SOCKS5_PORTS else "http"
+                e = f"{scheme}://{user}:{password}@{host}:{port}"
         if e not in seen:
             seen.add(e)
             result.append(e)
@@ -116,18 +119,20 @@ def mark_proxy_bad(proxy_url: str) -> None:
 
 
 def playwright_proxy(stealth_cfg: dict | None = None) -> dict | None:
-    """Return a Playwright-compatible proxy dict or None.
-    Playwright requires credentials as separate fields, not embedded in the URL.
-    """
+    """Return a Playwright-compatible proxy dict or None."""
     url = get_proxy(stealth_cfg)
     if not url:
         return None
-    # Parse credentials out of the URL: http://user:pass@host:port
     from urllib.parse import urlparse
     p = urlparse(url)
-    proxy: dict = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
-    if p.username:
-        proxy["username"] = p.username
-    if p.password:
-        proxy["password"] = p.password
-    return proxy
+    if p.scheme in ("socks5", "socks4"):
+        # SOCKS5/4: Playwright accepts credentials embedded in the server URL
+        return {"server": url}
+    else:
+        # HTTP proxy: Playwright requires credentials as separate fields
+        proxy: dict = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
+        if p.username:
+            proxy["username"] = p.username
+        if p.password:
+            proxy["password"] = p.password
+        return proxy
