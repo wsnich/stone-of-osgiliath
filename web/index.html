@@ -1694,18 +1694,9 @@ select.form-input option { background: var(--surface2); }
 </head>
 <body>
 
-<!-- ── Startup loading overlay ──────────────────────── -->
-<div id="startup-overlay" onclick="this.style.display='none'" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;cursor:pointer" title="Click to dismiss">
-  <div style="font-size:24px;font-weight:700;color:var(--accent)">The Stone of Osgiliath</div>
-  <div style="display:flex;align-items:center;gap:10px">
-    <div style="width:16px;height:16px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0"></div>
-    <span id="startup-msg" style="font-size:13px;color:var(--text)">Connecting to server…</span>
-  </div>
-  <div style="width:320px;height:3px;background:var(--border);border-radius:2px;overflow:hidden">
-    <div id="startup-bar" style="height:100%;width:0%;background:var(--accent);transition:width .3s ease"></div>
-  </div>
-  <div id="startup-steps" style="font-size:11px;color:var(--muted);text-align:left;max-width:320px;width:320px;line-height:2"></div>
-  <div style="font-size:10px;color:var(--muted);margin-top:8px">Click anywhere to dismiss</div>
+<!-- ── Startup loading bar ───────────────────────── -->
+<div id="startup-bar-wrap" style="position:fixed;top:0;left:0;right:0;z-index:9999;height:3px;background:var(--border)">
+  <div id="startup-bar" style="height:100%;width:0%;background:var(--accent);transition:width .4s ease"></div>
 </div>
 
 <!-- ── Header ──────────────────────────────────────────────── -->
@@ -2755,16 +2746,19 @@ let logAutoScroll = true;
 // ── WebSocket ────────────────────────────────────────────────
 let ws;
 
+function _hideStartupBar() {
+  const w = document.getElementById('startup-bar-wrap');
+  if (w) { w.style.opacity = '0'; setTimeout(() => w && w.remove(), 400); }
+}
+
 function connectWS() {
   ws = new WebSocket(`ws://${location.host}/ws`);
 
   ws.onopen = () => {
     setStatus(null, 'Connected');
     requestNotifyPermission();
-    const msgEl = document.getElementById('startup-msg');
-    const barEl = document.getElementById('startup-bar');
-    if (msgEl) msgEl.textContent = 'Connected — running startup tasks…';
-    if (barEl) barEl.style.width = '5%';
+    const b = document.getElementById('startup-bar');
+    if (b) b.style.width = '20%';
   };
 
   ws.onclose = () => {
@@ -2776,45 +2770,25 @@ function connectWS() {
     setStatus(false, 'Connection error');
   };
 
-  function _dismissStartupOverlay() {
-  const el = document.getElementById('startup-overlay');
-  if (!el || el._dismissed) return;
-  el._dismissed = true;
-  el.style.transition = 'opacity 0.4s ease';
-  el.style.opacity = '0';
-  el.style.pointerEvents = 'none';
-  setTimeout(() => { if (el.parentNode) el.remove(); }, 450);
-}
-// Hard fallback — always dismiss after 15s
-setTimeout(_dismissStartupOverlay, 15000);
-
 ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     switch (msg.type) {
       case 'startup_progress':
         { const d = typeof msg.data === 'object' ? msg.data : {text: msg.data, pct: null};
-          const msgEl = document.getElementById('startup-msg');
-          const barEl = document.getElementById('startup-bar');
-          const stepsEl = document.getElementById('startup-steps');
-          if (msgEl) msgEl.textContent = d.text;
-          if (barEl && d.pct != null) barEl.style.width = d.pct + '%';
-          if (stepsEl && d.done) {
-            const line = document.createElement('div');
-            line.style.cssText = 'display:flex;align-items:center;gap:6px';
-            line.innerHTML = '<span style="color:var(--green)">&#10003;</span><span>' + d.text + '</span>';
-            stepsEl.appendChild(line);
-          }
+          const b = document.getElementById('startup-bar');
+          if (b && d.pct != null) b.style.width = d.pct + '%';
         }
         break;
       case 'startup_complete':
-        { const barEl = document.getElementById('startup-bar');
-          if (barEl) barEl.style.width = '100%';
-          setTimeout(_dismissStartupOverlay, 400);
+        { const b = document.getElementById('startup-bar');
+          if (b) { b.style.width = '100%'; setTimeout(_hideStartupBar, 300); }
         }
         break;
       case 'state':
         renderFullState(msg.data);
-        _dismissStartupOverlay();
+        { const b = document.getElementById('startup-bar');
+          if (b) { b.style.width = '100%'; setTimeout(_hideStartupBar, 300); }
+        }
         break;
       case 'product_update':
         updateProductCard(msg.data);
@@ -3533,7 +3507,8 @@ async function saveSettingsModal() {
     headless: document.getElementById('set-headless').checked,
     user_agent: document.getElementById('set-user-agent').value.trim(),
     browser_channel: document.getElementById('set-browser-channel').value,
-    proxy: document.getElementById('set-proxy').value.split(/?
+    proxy: document.getElementById('set-proxy').value.split(/
+?
 /).map(s=>s.trim()).filter(Boolean),
     page_timeout_ms: parseInt(document.getElementById('set-page-timeout').value) || 30000,
     network_timeout_seconds: parseInt(document.getElementById('set-network-timeout').value) || 15,
