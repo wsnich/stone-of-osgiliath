@@ -1695,13 +1695,16 @@ select.form-input option { background: var(--surface2); }
 <body>
 
 <!-- ── Startup loading overlay ──────────────────────── -->
-<div id="startup-overlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;transition:opacity .4s ease">
-  <div style="font-size:22px;font-weight:700;color:var(--accent)">The Stone of Osgiliath</div>
+<div id="startup-overlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+  <div style="font-size:24px;font-weight:700;color:var(--accent)">The Stone of Osgiliath</div>
   <div style="display:flex;align-items:center;gap:10px">
-    <div style="width:18px;height:18px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite"></div>
-    <span id="startup-msg" style="font-size:13px;color:var(--muted)">Connecting…</span>
+    <div id="startup-spinner" style="width:16px;height:16px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0"></div>
+    <span id="startup-msg" style="font-size:13px;color:var(--text)">Connecting to server…</span>
   </div>
-  <div id="startup-steps" style="font-size:11px;color:var(--muted);opacity:.6;text-align:center;max-width:320px;line-height:1.8"></div>
+  <div style="width:320px;height:3px;background:var(--border);border-radius:2px;overflow:hidden">
+    <div id="startup-bar" style="height:100%;width:0%;background:var(--accent);transition:width .3s ease"></div>
+  </div>
+  <div id="startup-steps" style="font-size:11px;color:var(--muted);text-align:left;max-width:320px;width:320px;line-height:2"></div>
 </div>
 
 <!-- ── Header ──────────────────────────────────────────────── -->
@@ -2758,7 +2761,9 @@ function connectWS() {
     setStatus(null, 'Connected');
     requestNotifyPermission();
     const msgEl = document.getElementById('startup-msg');
-    if (msgEl) msgEl.textContent = 'Connected — loading data…';
+    const barEl = document.getElementById('startup-bar');
+    if (msgEl) msgEl.textContent = 'Connected — running startup tasks…';
+    if (barEl) barEl.style.width = '5%';
   };
 
   ws.onclose = () => {
@@ -2772,24 +2777,39 @@ function connectWS() {
 
   function _dismissStartupOverlay() {
   const el = document.getElementById('startup-overlay');
-  if (!el) return;
+  if (!el || el._dismissed) return;
+  el._dismissed = true;
+  el.style.transition = 'opacity 0.4s ease';
   el.style.opacity = '0';
   el.style.pointerEvents = 'none';
-  setTimeout(() => el.remove(), 420);
+  setTimeout(() => { if (el.parentNode) el.remove(); }, 450);
 }
+// Hard fallback — always dismiss after 15s
+setTimeout(_dismissStartupOverlay, 15000);
 
 ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     switch (msg.type) {
       case 'startup_progress':
-        { const msgEl = document.getElementById('startup-msg');
+        { const d = typeof msg.data === 'object' ? msg.data : {text: msg.data, pct: null};
+          const msgEl = document.getElementById('startup-msg');
+          const barEl = document.getElementById('startup-bar');
           const stepsEl = document.getElementById('startup-steps');
-          if (msgEl) msgEl.textContent = msg.data;
-          if (stepsEl) stepsEl.innerHTML += (stepsEl.innerHTML ? '<br>' : '') + '✓ ' + msg.data;
+          if (msgEl) msgEl.textContent = d.text;
+          if (barEl && d.pct != null) barEl.style.width = d.pct + '%';
+          if (stepsEl && d.done) {
+            const line = document.createElement('div');
+            line.style.cssText = 'display:flex;align-items:center;gap:6px';
+            line.innerHTML = '<span style="color:var(--green)">&#10003;</span><span>' + d.text + '</span>';
+            stepsEl.appendChild(line);
+          }
         }
         break;
       case 'startup_complete':
-        _dismissStartupOverlay();
+        { const barEl = document.getElementById('startup-bar');
+          if (barEl) barEl.style.width = '100%';
+          setTimeout(_dismissStartupOverlay, 400);
+        }
         break;
       case 'state':
         renderFullState(msg.data);

@@ -836,32 +836,43 @@ async def lifespan(app: FastAPI):
 
     # Slow startup work runs in background AFTER server is accepting connections
     async def _post_start_tasks():
-        await asyncio.sleep(1)  # let WS connections establish first
+        await asyncio.sleep(0.8)  # let WS connections establish first
 
-        async def _progress(msg: str):
-            print(f"  [startup] {msg}")
-            await app_state.ws.broadcast({"type": "startup_progress", "data": msg})
+        async def _progress(text: str, pct: int, done: bool = False):
+            print(f"  [startup] {text}")
+            await app_state.ws.broadcast({"type": "startup_progress", "data": {
+                "text": text, "pct": pct, "done": done,
+            }})
 
-        await _progress("Saving state…")
+        await _progress("Saving state to disk…", 10)
         app_state.save_to_disk()
+        await _progress("State saved", 15, done=True)
 
-        await _progress("Backfilling retailer intelligence…")
+        await _progress("Backfilling retailer intelligence…", 20)
         backfilled = await price_db.backfill_retailer_sightings()
         if backfilled:
-            await _progress(f"Backfilled {backfilled} retailer sightings")
+            await _progress(f"Backfilled {backfilled} retailer sightings", 35, done=True)
+        else:
+            await _progress("Retailer intelligence up to date", 35, done=True)
 
-        await _progress("Backfilling eBay transactions…")
+        await _progress("Backfilling eBay transactions…", 40)
         backfilled_tx = await price_db.backfill_ebay_transactions(app_state.product_statuses)
         if backfilled_tx:
-            await _progress(f"Backfilled {backfilled_tx} eBay transactions")
+            await _progress(f"Backfilled {backfilled_tx} eBay transactions", 55, done=True)
+        else:
+            await _progress("eBay transactions up to date", 55, done=True)
 
-        remote_images = [ps for ps in app_state.product_statuses if ps.image_url and ps.image_url.startswith("http")]
-        if remote_images:
-            await _progress(f"Caching {len(remote_images)} product images…")
-            for ps in remote_images:
+        remote_images = [ps for ps in app_state.product_statuses
+                         if ps.image_url and ps.image_url.startswith("http")]
+        total_images = len(remote_images)
+        if total_images:
+            for i, ps in enumerate(remote_images):
+                pct = 55 + int((i / total_images) * 40)
+                await _progress(f"Caching images… ({i + 1}/{total_images})", pct)
                 local = await cache_image(ps.image_url)
                 if local:
                     ps.image_url = local
+            await _progress(f"Cached {total_images} product images", 95, done=True)
 
         await app_state.ws.broadcast({"type": "startup_complete", "data": None})
         print("  [startup] Ready")
