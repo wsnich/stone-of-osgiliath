@@ -3426,7 +3426,7 @@ async function openSettingsModal() {
   document.getElementById('set-headless').checked = data.headless !== false;
   document.getElementById('set-user-agent').value = data.user_agent || '';
   document.getElementById('set-browser-channel').value = data.browser_channel || '';
-  document.getElementById('set-proxy').value = Array.isArray(data.proxy) ? data.proxy.join('\n') : (data.proxy || '');
+  document.getElementById('set-proxy').value = Array.isArray(data.proxy) ? data.proxy.join(String.fromCharCode(10)) : (data.proxy || '');
   document.getElementById('set-page-timeout').value = data.page_timeout_ms || 30000;
   document.getElementById('set-network-timeout').value = data.network_timeout_seconds || 15;
   document.getElementById('set-schedule-enabled').checked = data.schedule_enabled || false;
@@ -3507,9 +3507,7 @@ async function saveSettingsModal() {
     headless: document.getElementById('set-headless').checked,
     user_agent: document.getElementById('set-user-agent').value.trim(),
     browser_channel: document.getElementById('set-browser-channel').value,
-    proxy: document.getElementById('set-proxy').value.split(/
-?
-/).map(s=>s.trim()).filter(Boolean),
+    proxy: document.getElementById('set-proxy').value.split(String.fromCharCode(10)).map(s=>s.trim()).filter(Boolean),
     page_timeout_ms: parseInt(document.getElementById('set-page-timeout').value) || 30000,
     network_timeout_seconds: parseInt(document.getElementById('set-network-timeout').value) || 15,
     schedule_enabled: document.getElementById('set-schedule-enabled').checked,
