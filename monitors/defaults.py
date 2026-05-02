@@ -125,14 +125,10 @@ def playwright_proxy(stealth_cfg: dict | None = None) -> dict | None:
         return None
     from urllib.parse import urlparse
     p = urlparse(url)
-    if p.scheme in ("socks5", "socks4"):
-        # SOCKS5/4: Playwright accepts credentials embedded in the server URL
-        return {"server": url}
-    else:
-        # HTTP proxy: Playwright requires credentials as separate fields
-        proxy: dict = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
-        if p.username:
-            proxy["username"] = p.username
-        if p.password:
-            proxy["password"] = p.password
-        return proxy
+    # Playwright always requires credentials as separate fields regardless of scheme
+    proxy: dict = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
+    if p.username:
+        proxy["username"] = p.username
+    if p.password:
+        proxy["password"] = p.password
+    return proxy
