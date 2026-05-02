@@ -1694,6 +1694,16 @@ select.form-input option { background: var(--surface2); }
 </head>
 <body>
 
+<!-- ── Startup loading overlay ──────────────────────── -->
+<div id="startup-overlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;transition:opacity .4s ease">
+  <div style="font-size:22px;font-weight:700;color:var(--accent)">The Stone of Osgiliath</div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <div style="width:18px;height:18px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite"></div>
+    <span id="startup-msg" style="font-size:13px;color:var(--muted)">Connecting…</span>
+  </div>
+  <div id="startup-steps" style="font-size:11px;color:var(--muted);opacity:.6;text-align:center;max-width:320px;line-height:1.8"></div>
+</div>
+
 <!-- ── Header ──────────────────────────────────────────────── -->
 <header>
   <div class="logo">
@@ -2747,6 +2757,8 @@ function connectWS() {
   ws.onopen = () => {
     setStatus(null, 'Connected');
     requestNotifyPermission();
+    const msgEl = document.getElementById('startup-msg');
+    if (msgEl) msgEl.textContent = 'Connected — loading data…';
   };
 
   ws.onclose = () => {
@@ -2758,11 +2770,30 @@ function connectWS() {
     setStatus(false, 'Connection error');
   };
 
-  ws.onmessage = (e) => {
+  function _dismissStartupOverlay() {
+  const el = document.getElementById('startup-overlay');
+  if (!el) return;
+  el.style.opacity = '0';
+  el.style.pointerEvents = 'none';
+  setTimeout(() => el.remove(), 420);
+}
+
+ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     switch (msg.type) {
+      case 'startup_progress':
+        { const msgEl = document.getElementById('startup-msg');
+          const stepsEl = document.getElementById('startup-steps');
+          if (msgEl) msgEl.textContent = msg.data;
+          if (stepsEl) stepsEl.innerHTML += (stepsEl.innerHTML ? '<br>' : '') + '✓ ' + msg.data;
+        }
+        break;
+      case 'startup_complete':
+        _dismissStartupOverlay();
+        break;
       case 'state':
         renderFullState(msg.data);
+        _dismissStartupOverlay();
         break;
       case 'product_update':
         updateProductCard(msg.data);

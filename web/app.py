@@ -812,10 +812,7 @@ async def lifespan(app: FastAPI):
     mp_token = config.get("manapool_api_token", "")
     if mp_token:
         _manapool.set_token(mp_token)
-    # Backfill retailer intelligence from existing discord_log
-    backfilled = await price_db.backfill_retailer_sightings()
-    if backfilled:
-        print(f"  Backfilled {backfilled} retailer sightings from Discord log")
+    # Fast synchronous setup — load state from disk only (no network, no heavy DB work)
     app_state.load_from_config(config)
     app_state.restore_from_disk()
     deal_tracker.restore_from_disk()
@@ -825,32 +822,58 @@ async def lifespan(app: FastAPI):
         if ps.ebay_sales and ps.ebay_ignored_titles:
             _apply_ignore_patterns(ps)
             _recompute_ebay_aggregates(ps)
-    app_state.save_to_disk()  # persist the corrected ignore flags
-    # Backfill individual eBay transactions from restored app_state (one-time)
-    backfilled_tx = await price_db.backfill_ebay_transactions(app_state.product_statuses)
-    if backfilled_tx:
-        print(f"  Backfilled {backfilled_tx} eBay transactions from app state")
-    # Cache any remote images locally on startup
-    for ps in app_state.product_statuses:
-        if ps.image_url and ps.image_url.startswith("http"):
-            local = await cache_image(ps.image_url)
-            if local:
-                ps.image_url = local
-    task         = asyncio.create_task(monitor_loop())
-    reddit_task  = asyncio.create_task(reddit_poll_loop())
+
+    # Monitor starts PAUSED — user clicks "Resume Checks" to begin product checking.
+    app_state.monitor_running = False
+    app_state._monitor_task   = None
+
+    reddit_task   = asyncio.create_task(reddit_poll_loop())
     research_task = asyncio.create_task(research_loop())
+    discord_task  = asyncio.create_task(discord_gateway_loop())
 
-    discord_task = asyncio.create_task(discord_gateway_loop())
-
-    app_state._monitor_task = task
     app_state._reddit_task  = reddit_task
-    app_state._discord_task = discord_task   # tracked separately — never cancelled by stop_monitor
+    app_state._discord_task = discord_task
+
+    # Slow startup work runs in background AFTER server is accepting connections
+    async def _post_start_tasks():
+        await asyncio.sleep(1)  # let WS connections establish first
+
+        async def _progress(msg: str):
+            print(f"  [startup] {msg}")
+            await app_state.ws.broadcast({"type": "startup_progress", "data": msg})
+
+        await _progress("Saving state…")
+        app_state.save_to_disk()
+
+        await _progress("Backfilling retailer intelligence…")
+        backfilled = await price_db.backfill_retailer_sightings()
+        if backfilled:
+            await _progress(f"Backfilled {backfilled} retailer sightings")
+
+        await _progress("Backfilling eBay transactions…")
+        backfilled_tx = await price_db.backfill_ebay_transactions(app_state.product_statuses)
+        if backfilled_tx:
+            await _progress(f"Backfilled {backfilled_tx} eBay transactions")
+
+        remote_images = [ps for ps in app_state.product_statuses if ps.image_url and ps.image_url.startswith("http")]
+        if remote_images:
+            await _progress(f"Caching {len(remote_images)} product images…")
+            for ps in remote_images:
+                local = await cache_image(ps.image_url)
+                if local:
+                    ps.image_url = local
+
+        await app_state.ws.broadcast({"type": "startup_complete", "data": None})
+        print("  [startup] Ready")
+
+    asyncio.create_task(_post_start_tasks())
     yield
     app_state.save_to_disk()
     deal_tracker.save_to_disk()
     product_hub.save_to_disk()
     app_state.monitor_running = False
-    for t in (task, reddit_task, discord_task, research_task):
+    tasks_to_cancel = [t for t in (app_state._monitor_task, reddit_task, discord_task, research_task) if t]
+    for t in tasks_to_cancel:
         t.cancel()
         try:
             await t

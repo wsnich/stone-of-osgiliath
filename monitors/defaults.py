@@ -55,16 +55,38 @@ _bad_lock = threading.Lock()
 
 
 def _parse_proxy_list(raw) -> list[str]:
-    """Normalise raw config value to a list of proxy URL strings."""
+    """Normalise raw config value to a deduplicated list of proxy URL strings.
+
+    Accepts:
+      - Standard URL:          http://user:pass@host:port
+      - proxy-cheap export:    host:port:user:pass
+      - List of either format
+      - Newline/comma-separated string of either format
+    """
     if not raw:
         return []
     if isinstance(raw, list):
         entries = raw
     else:
-        # Split on newlines and/or commas
         import re
         entries = re.split(r"[\n,]+", str(raw))
-    return [e.strip() for e in entries if e.strip()]
+
+    result = []
+    seen: set[str] = set()
+    for e in entries:
+        e = e.strip()
+        if not e:
+            continue
+        # Convert host:port:user:pass → http://user:pass@host:port
+        if not e.startswith(("http://", "https://", "socks5://", "socks4://")):
+            parts = e.split(":")
+            if len(parts) == 4:
+                host, port, user, password = parts
+                e = f"http://{user}:{password}@{host}:{port}"
+        if e not in seen:
+            seen.add(e)
+            result.append(e)
+    return result
 
 
 def get_proxy(stealth_cfg: dict | None = None) -> str | None:
