@@ -3,6 +3,9 @@ Shared default values for monitors.
 Read from config.stealth at runtime, with sensible fallbacks.
 """
 
+import random
+import threading
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -37,15 +40,57 @@ def get_browser_channel(stealth_cfg: dict | None = None) -> str | None:
     return None
 
 
+# ── Proxy rotation ────────────────────────────────────────────────────────────
+# config.stealth.proxy accepts either:
+#   - a single URL string:  "socks5://host:1080"
+#   - a list of URLs:       ["socks5://h1:1080", "http://user:pass@h2:3128"]
+#   - a newline/comma-separated string (pasted from a proxy list)
+#
+# Rotation is random per call so different concurrent product checks use
+# different IPs.  Failed proxies can be marked bad via mark_proxy_bad() and
+# won't be selected again until the pool is reset.
+
+_bad_proxies: set[str] = set()
+_bad_lock = threading.Lock()
+
+
+def _parse_proxy_list(raw) -> list[str]:
+    """Normalise raw config value to a list of proxy URL strings."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        entries = raw
+    else:
+        # Split on newlines and/or commas
+        import re
+        entries = re.split(r"[\n,]+", str(raw))
+    return [e.strip() for e in entries if e.strip()]
+
+
 def get_proxy(stealth_cfg: dict | None = None) -> str | None:
-    """Return proxy URL string or None.  Supports http://, https://, socks5://.
-    Example config values:
-        "http://user:pass@host:port"
-        "socks5://host:1080"
+    """Return one proxy URL chosen at random from the configured pool.
+    Skips proxies previously marked bad.  Returns None if no proxies configured.
     """
-    if stealth_cfg and stealth_cfg.get("proxy"):
-        return stealth_cfg["proxy"] or None
-    return None
+    if not stealth_cfg:
+        return None
+    pool = _parse_proxy_list(stealth_cfg.get("proxy"))
+    if not pool:
+        return None
+    with _bad_lock:
+        available = [p for p in pool if p not in _bad_proxies]
+    if not available:
+        # All marked bad — reset and try the full pool again
+        with _bad_lock:
+            _bad_proxies.clear()
+        available = pool
+    return random.choice(available)
+
+
+def mark_proxy_bad(proxy_url: str) -> None:
+    """Flag a proxy as failed so it won't be picked until the pool resets."""
+    if proxy_url:
+        with _bad_lock:
+            _bad_proxies.add(proxy_url)
 
 
 def playwright_proxy(stealth_cfg: dict | None = None) -> dict | None:

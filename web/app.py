@@ -1906,7 +1906,7 @@ async def get_settings():
         "headless":              stealth.get("headless", True),
         "user_agent":            stealth.get("user_agent") or "",
         "browser_channel":       stealth.get("browser_channel") or "",
-        "proxy":                 stealth.get("proxy") or "",
+        "proxy":                 stealth.get("proxy") or [],
         "page_timeout_ms":       stealth.get("page_timeout_ms", 30000),
         "network_timeout_seconds": stealth.get("network_timeout_seconds", 15),
         "schedule_enabled":      schedule.get("enabled", False),
@@ -1942,7 +1942,12 @@ async def update_settings(body: dict):
     if "browser_channel" in body:
         s["browser_channel"] = body["browser_channel"].strip() or None
     if "proxy" in body:
-        s["proxy"] = body["proxy"].strip() or None
+        raw = body["proxy"]
+        # Accept list (from UI) or a single string (from direct API/config editing)
+        if isinstance(raw, list):
+            s["proxy"] = [p.strip() for p in raw if str(p).strip()] or None
+        else:
+            s["proxy"] = [p.strip() for p in str(raw).splitlines() if p.strip()] or None
     if "page_timeout_ms" in body:
         s["page_timeout_ms"] = max(5000, int(body["page_timeout_ms"]))
     if "network_timeout_seconds" in body:

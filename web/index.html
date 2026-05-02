@@ -1956,9 +1956,9 @@ select.form-input option { background: var(--surface2); }
             </div>
           </div>
           <div>
-            <label class="form-label">Proxy</label>
-            <input type="text" class="form-input" id="set-proxy" placeholder="e.g. socks5://host:1080 or http://user:pass@host:port" style="font-size:11px">
-            <div style="font-size:10px;color:var(--muted);margin-top:2px">Applied to all TCGPlayer and eBay browser checks. Leave blank to use your direct connection.</div>
+            <label class="form-label">Proxies</label>
+            <textarea class="form-input" id="set-proxy" rows="4" placeholder="One proxy per line, e.g.:&#10;socks5://host:1080&#10;http://user:pass@host2:3128" style="font-size:11px;font-family:monospace;resize:vertical"></textarea>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">One proxy per line. Each product check picks a random proxy. Failed proxies are skipped until all have been tried.</div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
@@ -3400,7 +3400,8 @@ async function openSettingsModal() {
   document.getElementById('set-headless').checked = data.headless !== false;
   document.getElementById('set-user-agent').value = data.user_agent || '';
   document.getElementById('set-browser-channel').value = data.browser_channel || '';
-  document.getElementById('set-proxy').value = data.proxy || '';
+  document.getElementById('set-proxy').value = Array.isArray(data.proxy) ? data.proxy.join('
+') : (data.proxy || '');
   document.getElementById('set-page-timeout').value = data.page_timeout_ms || 30000;
   document.getElementById('set-network-timeout').value = data.network_timeout_seconds || 15;
   document.getElementById('set-schedule-enabled').checked = data.schedule_enabled || false;
@@ -3481,7 +3482,8 @@ async function saveSettingsModal() {
     headless: document.getElementById('set-headless').checked,
     user_agent: document.getElementById('set-user-agent').value.trim(),
     browser_channel: document.getElementById('set-browser-channel').value,
-    proxy: document.getElementById('set-proxy').value.trim(),
+    proxy: document.getElementById('set-proxy').value.split('
+').map(s=>s.trim()).filter(Boolean),
     page_timeout_ms: parseInt(document.getElementById('set-page-timeout').value) || 30000,
     network_timeout_seconds: parseInt(document.getElementById('set-network-timeout').value) || 15,
     schedule_enabled: document.getElementById('set-schedule-enabled').checked,

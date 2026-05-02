@@ -178,8 +178,9 @@ class TCGPlayerMonitor:
                 channel = get_browser_channel(stealth_cfg)
                 if channel:
                     launch_kw["channel"] = channel
-                from monitors.defaults import playwright_proxy
+                from monitors.defaults import playwright_proxy, mark_proxy_bad
                 proxy = playwright_proxy(stealth_cfg)
+                _proxy_url = proxy["server"] if proxy else None
                 if proxy:
                     launch_kw["proxy"] = proxy
                 browser = await pw.chromium.launch(**launch_kw)
@@ -282,7 +283,13 @@ class TCGPlayerMonitor:
 
                 page.on("response", on_response)
 
-                await page.goto(url, wait_until="networkidle", timeout=get_page_timeout(stealth_cfg))
+                try:
+                    await page.goto(url, wait_until="networkidle", timeout=get_page_timeout(stealth_cfg))
+                except Exception as _nav_err:
+                    if _proxy_url:
+                        mark_proxy_bad(_proxy_url)
+                        log.warning(f"TCGPlayer: proxy {_proxy_url} failed ({_nav_err}) — marked bad")
+                    raise
 
                 # Brief extra wait so late-firing XHR calls can complete
                 await asyncio.sleep(3)
@@ -558,7 +565,7 @@ class TCGPlayerMonitor:
         body = {"mpfev": 3, "channel": 0, "language": 1, "start": 0, "rows": 1}
         try:
             from curl_cffi.requests import AsyncSession
-            from monitors.defaults import get_proxy
+            from monitors.defaults import get_proxy, mark_proxy_bad
             _proxy = get_proxy(stealth_cfg)
             async with AsyncSession(impersonate="chrome124", proxy=_proxy) as s:
                 r = await s.post(api_url, json=body, timeout=10,
@@ -574,6 +581,9 @@ class TCGPlayerMonitor:
                     if results:
                         return results[0].get("totalResults")
         except Exception as e:
+            if _proxy:
+                mark_proxy_bad(_proxy)
+                log.debug(f"TCGPlayer quantity API proxy {_proxy} failed — marked bad")
             log.debug(f"TCGPlayer quantity API error: {e}")
         return None
 
