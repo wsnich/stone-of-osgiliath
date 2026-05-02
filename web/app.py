@@ -993,11 +993,19 @@ async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     await app_state.ws.connect(ws)
     try:
-        await ws.send_text(json.dumps(app_state.snapshot()))
+        try:
+            snapshot = json.dumps(app_state.snapshot())
+        except Exception as e:
+            print(f"  [WS] ERROR serializing snapshot: {e}")
+            import traceback; traceback.print_exc()
+            snapshot = json.dumps({"type": "state", "data": {"error": str(e)}})
+        await ws.send_text(snapshot)
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        print(f"  [WS] ERROR in websocket_endpoint: {e}")
     finally:
         await app_state.ws.disconnect(ws)
 

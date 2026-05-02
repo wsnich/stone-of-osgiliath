@@ -1695,16 +1695,17 @@ select.form-input option { background: var(--surface2); }
 <body>
 
 <!-- ── Startup loading overlay ──────────────────────── -->
-<div id="startup-overlay" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px">
+<div id="startup-overlay" onclick="this.style.display='none'" style="position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;cursor:pointer" title="Click to dismiss">
   <div style="font-size:24px;font-weight:700;color:var(--accent)">The Stone of Osgiliath</div>
   <div style="display:flex;align-items:center;gap:10px">
-    <div id="startup-spinner" style="width:16px;height:16px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0"></div>
+    <div style="width:16px;height:16px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0"></div>
     <span id="startup-msg" style="font-size:13px;color:var(--text)">Connecting to server…</span>
   </div>
   <div style="width:320px;height:3px;background:var(--border);border-radius:2px;overflow:hidden">
     <div id="startup-bar" style="height:100%;width:0%;background:var(--accent);transition:width .3s ease"></div>
   </div>
   <div id="startup-steps" style="font-size:11px;color:var(--muted);text-align:left;max-width:320px;width:320px;line-height:2"></div>
+  <div style="font-size:10px;color:var(--muted);margin-top:8px">Click anywhere to dismiss</div>
 </div>
 
 <!-- ── Header ──────────────────────────────────────────────── -->
@@ -3451,8 +3452,7 @@ async function openSettingsModal() {
   document.getElementById('set-headless').checked = data.headless !== false;
   document.getElementById('set-user-agent').value = data.user_agent || '';
   document.getElementById('set-browser-channel').value = data.browser_channel || '';
-  document.getElementById('set-proxy').value = Array.isArray(data.proxy) ? data.proxy.join('
-') : (data.proxy || '');
+  document.getElementById('set-proxy').value = Array.isArray(data.proxy) ? data.proxy.join('\n') : (data.proxy || '');
   document.getElementById('set-page-timeout').value = data.page_timeout_ms || 30000;
   document.getElementById('set-network-timeout').value = data.network_timeout_seconds || 15;
   document.getElementById('set-schedule-enabled').checked = data.schedule_enabled || false;
@@ -3533,8 +3533,8 @@ async function saveSettingsModal() {
     headless: document.getElementById('set-headless').checked,
     user_agent: document.getElementById('set-user-agent').value.trim(),
     browser_channel: document.getElementById('set-browser-channel').value,
-    proxy: document.getElementById('set-proxy').value.split('
-').map(s=>s.trim()).filter(Boolean),
+    proxy: document.getElementById('set-proxy').value.split(/?
+/).map(s=>s.trim()).filter(Boolean),
     page_timeout_ms: parseInt(document.getElementById('set-page-timeout').value) || 30000,
     network_timeout_seconds: parseInt(document.getElementById('set-network-timeout').value) || 15,
     schedule_enabled: document.getElementById('set-schedule-enabled').checked,
