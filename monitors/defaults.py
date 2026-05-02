@@ -116,8 +116,18 @@ def mark_proxy_bad(proxy_url: str) -> None:
 
 
 def playwright_proxy(stealth_cfg: dict | None = None) -> dict | None:
-    """Return a Playwright-compatible proxy dict or None."""
+    """Return a Playwright-compatible proxy dict or None.
+    Playwright requires credentials as separate fields, not embedded in the URL.
+    """
     url = get_proxy(stealth_cfg)
     if not url:
         return None
-    return {"server": url}
+    # Parse credentials out of the URL: http://user:pass@host:port
+    from urllib.parse import urlparse
+    p = urlparse(url)
+    proxy: dict = {"server": f"{p.scheme}://{p.hostname}:{p.port}"}
+    if p.username:
+        proxy["username"] = p.username
+    if p.password:
+        proxy["password"] = p.password
+    return proxy
