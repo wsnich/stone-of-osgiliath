@@ -284,7 +284,9 @@ class TCGPlayerMonitor:
                 page.on("response", on_response)
 
                 try:
-                    await page.goto(url, wait_until="networkidle", timeout=get_page_timeout(stealth_cfg))
+                    await page.goto(url, wait_until="domcontentloaded", timeout=get_page_timeout(stealth_cfg))
+                    # Extra wait for JS/API calls to fire after DOM is ready
+                    await asyncio.sleep(5)
                 except Exception as _nav_err:
                     if _proxy_url:
                         mark_proxy_bad(_proxy_url)
