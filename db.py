@@ -205,6 +205,27 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_gs_time ON google_shopping_results(checked_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_gs_retailer ON google_shopping_results(retailer_domain)")
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT    NOT NULL,
+                account_id      TEXT    NOT NULL,
+                account_name    TEXT    NOT NULL,
+                retailer        TEXT    NOT NULL,
+                identifier      TEXT,                   -- ASIN / SKU / URL
+                product_label   TEXT,                   -- friendly name from picker
+                action          TEXT    NOT NULL,       -- 'atc' | 'checkout' | 'clear_cart'
+                success         INTEGER NOT NULL,       -- 0 / 1
+                order_id        TEXT,
+                total           REAL,
+                message         TEXT,
+                source          TEXT    NOT NULL DEFAULT 'manual'  -- 'manual' | 'auto'
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_orders_time ON orders(timestamp DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_orders_account ON orders(account_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_orders_action ON orders(action)")
+
         await db.commit()
 
 # ---------------------------------------------------------------------------
@@ -917,3 +938,98 @@ async def get_google_shopping_retailers() -> list[dict]:
             ORDER BY avg_discount DESC
         """) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Orders — checkout-attempt audit trail
+# ---------------------------------------------------------------------------
+
+async def record_order(
+    *,
+    account_id: str,
+    account_name: str,
+    retailer: str,
+    identifier: Optional[str],
+    product_label: Optional[str],
+    action: str,                # 'atc' | 'checkout' | 'clear_cart'
+    success: bool,
+    order_id: Optional[str] = None,
+    total: Optional[float] = None,
+    message: Optional[str] = None,
+    source: str = "manual",     # 'manual' | 'auto'
+) -> None:
+    """Append a row to the orders table. Captures both successes and failures
+    so the user has a complete audit trail of every ATC/checkout attempt."""
+    from datetime import datetime as _dt
+    ts = _dt.now().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO orders
+               (timestamp, account_id, account_name, retailer, identifier,
+                product_label, action, success, order_id, total, message, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ts, account_id, account_name, retailer, identifier, product_label,
+             action, 1 if success else 0, order_id, total, message, source),
+        )
+        await db.commit()
+
+
+async def query_orders(
+    limit: int = 100,
+    offset: int = 0,
+    account_id: Optional[str] = None,
+    retailer: Optional[str] = None,
+    action: Optional[str] = None,
+    success: Optional[bool] = None,
+    source: Optional[str] = None,
+    search: Optional[str] = None,
+) -> dict:
+    """Return paginated orders + summary counts."""
+    where = []
+    params: list = []
+    if account_id:
+        where.append("account_id = ?"); params.append(account_id)
+    if retailer:
+        where.append("retailer = ?");   params.append(retailer)
+    if action:
+        where.append("action = ?");     params.append(action)
+    if success is not None:
+        where.append("success = ?");    params.append(1 if success else 0)
+    if source:
+        where.append("source = ?");     params.append(source)
+    if search:
+        where.append("(product_label LIKE ? OR message LIKE ? OR identifier LIKE ? OR order_id LIKE ?)")
+        like = f"%{search}%"; params.extend([like, like, like, like])
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"SELECT * FROM orders{where_sql} ORDER BY id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        async with db.execute(
+            f"""SELECT
+                    COUNT(*)                                 AS total,
+                    SUM(CASE WHEN success=1 THEN 1 ELSE 0 END) AS successes,
+                    SUM(CASE WHEN action='atc'      THEN 1 ELSE 0 END) AS atc_count,
+                    SUM(CASE WHEN action='checkout' THEN 1 ELSE 0 END) AS checkout_count
+                FROM orders{where_sql}""",
+            params,
+        ) as cur:
+            stats_row = await cur.fetchone()
+            stats = dict(stats_row) if stats_row else {}
+    return {"orders": rows, "stats": stats}
+
+
+async def delete_old_orders(keep_days: int = 90) -> int:
+    """Prune orders older than keep_days (UTC). Returns rows deleted."""
+    from datetime import datetime as _dt, timedelta as _td
+    cutoff = (_dt.now() - _td(days=keep_days)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM orders WHERE timestamp < ?", (cutoff,)) as cur:
+            n = (await cur.fetchone())[0]
+        await db.execute("DELETE FROM orders WHERE timestamp < ?", (cutoff,))
+        await db.commit()
+    return n

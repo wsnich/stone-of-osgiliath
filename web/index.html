@@ -1889,7 +1889,11 @@ select.form-input option { background: var(--surface2); }
               <input type="password" class="form-input" id="set-discord-password" placeholder="Password" style="font-size:10px">
             </div>
           </div>
-          <div style="font-size:9px;color:var(--muted);margin-top:2px">Logs into Discord web in a headless browser. Looks like a normal browser session. Requires restart.</div>
+          <div style="font-size:9px;color:var(--muted);margin-top:2px">Logs into Discord web in a browser. Looks like a normal browser session. Requires restart.</div>
+          <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="set-discord-headless">
+            Hide Discord browser window (headless) — only enable after first login is saved. If your session ever expires, uncheck this temporarily to re-login.
+          </label>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
               <label class="form-label">Bot Token <span style="color:var(--muted);font-weight:400">for DM notifications</span></label>
@@ -1978,7 +1982,35 @@ select.form-input option { background: var(--surface2); }
               </div>
             </div>
             <div id="proxycheap-bw-rows"></div>
+            <div id="bandwidth-governor-status" style="display:none;font-size:10px;margin-top:8px;padding:6px 8px;border-radius:4px"></div>
             <pre id="proxycheap-bw-debug" style="display:none;font-size:10px;background:var(--surface3);padding:8px;border-radius:4px;margin-top:8px;max-height:400px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
+          </div>
+          <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+            <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Bandwidth Throttle</div>
+            <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px">
+              <input type="checkbox" id="set-bw-enabled"> Enabled — auto-throttle/pause TCG checks as bandwidth approaches the cap
+            </label>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;font-size:11px">
+              <div>
+                <label class="form-label" style="font-size:10px">Warn at %</label>
+                <input type="number" class="form-input" id="set-bw-warn" min="0" max="100" style="font-size:11px">
+              </div>
+              <div>
+                <label class="form-label" style="font-size:10px">Throttle at %</label>
+                <input type="number" class="form-input" id="set-bw-throttle" min="0" max="100" style="font-size:11px">
+              </div>
+              <div>
+                <label class="form-label" style="font-size:10px">Pause at %</label>
+                <input type="number" class="form-input" id="set-bw-pause" min="0" max="100" style="font-size:11px">
+              </div>
+              <div>
+                <label class="form-label" style="font-size:10px">Multiplier</label>
+                <input type="number" class="form-input" id="set-bw-multiplier" min="1" max="10" step="0.1" style="font-size:11px">
+              </div>
+            </div>
+            <div style="font-size:10px;color:var(--muted);margin-top:6px;line-height:1.5">
+              Warn = log only. Throttle = multiplies TCG check interval (so if interval is 30 min and multiplier is 2.0, becomes 60 min). Pause = skips proxied checks entirely.
+            </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
@@ -2168,6 +2200,7 @@ select.form-input option { background: var(--surface2); }
         <button class="tab-btn" id="tab-portfolio" onclick="switchTab('portfolio')">Portfolio</button>
         <button class="tab-btn" id="tab-intelligence" onclick="switchTab('intelligence')">Intelligence</button>
         <button class="tab-btn" id="tab-research" onclick="switchTab('research')">Research</button>
+        <button class="tab-btn" id="tab-accounts" onclick="switchTab('accounts')">Accounts</button>
       </div>
       <button class="btn btn-primary btn-sm" id="add-btn" onclick="handleAddBtn()">+ Add to Watchlist</button>
     </div>
@@ -2327,6 +2360,154 @@ select.form-input option { background: var(--surface2); }
 
     </div><!-- /panel-research -->
 
+    <!-- ── Accounts tab (checkout automation) ──────────── -->
+    <div class="tab-panel" id="panel-accounts">
+      <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:700;color:var(--text)">Checkout Accounts</span>
+          <span style="font-size:11px;color:var(--muted)">Each account is permanently pinned to one proxy. Sessions persist after first login.</span>
+          <button class="btn btn-primary btn-sm" style="margin-left:auto;font-size:11px" onclick="openAddAccountModal()">+ Add Account</button>
+        </div>
+        <div id="accounts-list" style="display:flex;flex-direction:column;gap:8px"></div>
+
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:24px">
+          <span style="font-size:13px;font-weight:700;color:var(--text)">Order History</span>
+          <span style="font-size:11px;color:var(--muted)">Every ATC and checkout attempt — successes and failures.</span>
+          <span id="orders-stats" style="font-size:10px;color:var(--muted)"></span>
+          <button class="btn btn-ghost btn-sm" style="margin-left:auto;font-size:11px" onclick="loadOrders()">↻ Refresh</button>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:10px">
+          <select id="orders-filter-action" onchange="loadOrders()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px">
+            <option value="">All actions</option>
+            <option value="atc">ATC</option>
+            <option value="checkout">Checkout</option>
+          </select>
+          <select id="orders-filter-success" onchange="loadOrders()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px">
+            <option value="">All</option>
+            <option value="true">Successes</option>
+            <option value="false">Failures</option>
+          </select>
+          <select id="orders-filter-source" onchange="loadOrders()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px">
+            <option value="">All sources</option>
+            <option value="manual">Manual</option>
+            <option value="auto">Auto-fired</option>
+          </select>
+          <select id="orders-filter-retailer" onchange="loadOrders()" style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px">
+            <option value="">All retailers</option>
+            <option value="amazon">Amazon</option>
+            <option value="bestbuy">Best Buy</option>
+          </select>
+          <input type="text" id="orders-filter-search" placeholder="Search…"
+            onkeydown="if(event.key==='Enter')loadOrders()"
+            oninput="clearTimeout(window._ordersDebounce);window._ordersDebounce=setTimeout(loadOrders,300)"
+            style="background:var(--surface3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:10px;padding:3px 6px;flex:1;min-width:120px">
+        </div>
+        <div id="orders-list" style="display:flex;flex-direction:column;gap:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;overflow:hidden;max-height:600px;overflow-y:auto"></div>
+      </div>
+    </div><!-- /panel-accounts -->
+
+  </div>
+
+  <!-- Add/Edit Account Modal -->
+  <div class="modal-backdrop" id="account-modal" style="display:none">
+    <div class="modal" style="max-width:480px">
+      <div class="modal-header">
+        <h3 id="account-modal-title">Add Account</h3>
+        <button class="modal-close" onclick="closeAccountModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div>
+            <label class="form-label">Retailer</label>
+            <select class="form-input" id="acc-retailer">
+              <option value="amazon">Amazon</option>
+              <option value="bestbuy">Best Buy</option>
+              <option value="walmart" disabled>Walmart (coming soon)</option>
+              <option value="target" disabled>Target (coming soon)</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Friendly Name</label>
+            <input type="text" class="form-input" id="acc-name" placeholder="e.g. Amazon Primary">
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">Email</label>
+              <input type="email" class="form-input" id="acc-email" autocomplete="off">
+            </div>
+            <div>
+              <label class="form-label">Password</label>
+              <input type="password" class="form-input" id="acc-password" autocomplete="new-password">
+            </div>
+          </div>
+          <div>
+            <label class="form-label">Pinned Proxy <span style="color:var(--muted);font-weight:400;font-size:10px">optional · host:port:user:pass</span></label>
+            <input type="text" class="form-input" id="acc-proxy" style="font-family:monospace;font-size:11px" placeholder="150.241.111.51:6555:nbgpeuwf:secret  (or leave blank)">
+            <label style="font-size:11px;display:flex;align-items:center;gap:6px;margin-top:4px;cursor:pointer">
+              <input type="checkbox" id="acc-no-proxy" onchange="_toggleAccProxy(this.checked)">
+              Use home IP (no proxy) — required for Best Buy if Akamai keeps rejecting proxied logins
+            </label>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">Use a proxy from your Webshare list that's NOT in your monitoring set. Without a proxy, multiple accounts on the same retailer will all log in from one IP.</div>
+          </div>
+          <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="acc-enabled" checked> Enabled
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost btn-sm" onclick="closeAccountModal()">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="saveAccountModal()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ATC Picker Modal -->
+  <div class="modal-backdrop" id="atc-picker-modal" style="display:none">
+    <div class="modal" style="max-width:520px">
+      <div class="modal-header">
+        <h3>Send to Cart</h3>
+        <button class="modal-close" onclick="closeAtcPickerModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px" id="atc-target-summary"></div>
+        <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;margin-bottom:10px">
+          <div>
+            <label class="form-label">Product URL or ASIN</label>
+            <input type="text" class="form-input" id="atc-url" style="font-family:monospace;font-size:11px">
+          </div>
+          <div>
+            <label class="form-label">Qty</label>
+            <input type="number" class="form-input" id="atc-qty" min="1" max="10" value="1">
+          </div>
+        </div>
+        <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px">
+          <input type="checkbox" id="atc-headless" checked> Headless (no visible browser windows during ATC)
+        </label>
+        <div style="border-top:1px solid var(--border);padding-top:8px;margin-bottom:8px">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;font-weight:600">
+            <input type="checkbox" id="atc-checkout"> Continue to checkout after ATC
+          </label>
+          <div id="atc-checkout-options" style="display:none;padding-left:22px">
+            <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px">
+              <input type="checkbox" id="atc-auto-confirm">
+              <span>Auto-confirm (click Place Your Order automatically)</span>
+            </label>
+            <div style="display:grid;grid-template-columns:120px 1fr;gap:8px;align-items:center;font-size:11px">
+              <span>Max total ($):</span>
+              <input type="number" class="form-input" id="atc-max-total" min="0" step="0.01" style="font-size:11px;padding:4px 6px" placeholder="e.g. 500.00">
+            </div>
+            <div style="font-size:10px;color:var(--muted);margin-top:4px">Auto-confirm requires a max total cap. Without auto-confirm, the visible browser navigates to the order-review page and stops — you click Place Your Order yourself.</div>
+          </div>
+        </div>
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Send to which accounts?</div>
+        <div id="atc-account-list" style="display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto"></div>
+        <div id="atc-results" style="display:none;margin-top:12px;padding:8px;background:var(--surface3);border-radius:6px;font-size:11px;max-height:200px;overflow-y:auto"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost btn-sm" onclick="closeAtcPickerModal()">Cancel</button>
+        <button class="btn btn-primary btn-sm" id="atc-go-btn" onclick="runAtcPicker()">Send</button>
+      </div>
+    </div>
   </div>
 
   <!-- ── Right: sidebar ───────────────────────────────────── -->
@@ -2857,6 +3038,25 @@ ws.onmessage = (e) => {
       case 'discord_gateway_status':
         handleGatewayStatus(msg.data);
         break;
+      case 'bandwidth_state':
+        renderBandwidthGovernorStatus(msg.data);
+        break;
+      case 'accounts_full':
+        accounts = msg.data;
+        if (_activeTab === 'accounts') renderAccountsList();
+        break;
+      case 'account_update':
+        if (Array.isArray(accounts)) {
+          const idx = accounts.findIndex(a => a.id === msg.data.id);
+          if (idx >= 0) accounts[idx] = msg.data; else accounts.push(msg.data);
+          if (_activeTab === 'accounts') renderAccountsList();
+        }
+        break;
+      case 'account_browser_state':
+        if (msg.data.open) _openAccountBrowsers.add(msg.data.account_id);
+        else               _openAccountBrowsers.delete(msg.data.account_id);
+        if (_activeTab === 'accounts') renderAccountsList();
+        break;
       case 'research_complete':
         updateResearchStatus(false);
         if (_activeTab === 'research') loadResearch();
@@ -2883,7 +3083,7 @@ document.getElementById('tab-research').style.display = 'none';
 // Restore tab from URL hash after reload
 if (window.location.hash) {
   const tab = window.location.hash.slice(1);
-  if (['deals','products','tcgplayer','graded','portfolio','intelligence','research'].includes(tab)) switchTab(tab);
+  if (['deals','products','tcgplayer','graded','portfolio','intelligence','research','accounts'].includes(tab)) switchTab(tab);
   history.replaceState(null, '', window.location.pathname);
 }
 
@@ -3445,7 +3645,14 @@ async function openSettingsModal() {
   document.getElementById('set-browser-channel').value = data.browser_channel || '';
   document.getElementById('set-proxy').value = Array.isArray(data.proxy) ? data.proxy.join(String.fromCharCode(10)) : (data.proxy || '');
   document.getElementById('set-webshare-key').value = data.webshare_api_key || '';
+  const bt = data.bandwidth_throttle || {};
+  document.getElementById('set-bw-enabled').checked    = bt.enabled !== false;
+  document.getElementById('set-bw-warn').value         = bt.warn_pct ?? 70;
+  document.getElementById('set-bw-throttle').value     = bt.throttle_pct ?? 85;
+  document.getElementById('set-bw-pause').value        = bt.pause_pct ?? 95;
+  document.getElementById('set-bw-multiplier').value   = bt.throttle_multiplier ?? 2.0;
   if (data.webshare_api_key) loadProxyBandwidth('webshare');
+  loadBandwidthGovernorStatus();
   document.getElementById('set-page-timeout').value = data.page_timeout_ms || 30000;
   document.getElementById('set-network-timeout').value = data.network_timeout_seconds || 15;
   document.getElementById('set-schedule-enabled').checked = data.schedule_enabled || false;
@@ -3460,6 +3667,7 @@ async function openSettingsModal() {
   document.getElementById('set-dm-user-id').value = data.dm_user_id || '';
   document.getElementById('set-discord-email').value = data.discord_email || '';
   document.getElementById('set-discord-password').value = data.discord_password || '';
+  document.getElementById('set-discord-headless').checked = !!data.discord_headless;
   document.getElementById('set-research-enabled').checked = data.research_enabled || false;
   document.getElementById('set-research-api-key').value = data.research_api_key || '';
   document.getElementById('set-research-interval').value = data.research_interval_hours || 168;
@@ -3519,6 +3727,51 @@ async function testDiscordDM() {
   if (data.status !== 'ok') alert(data.message);
 }
 
+async function loadBandwidthGovernorStatus() {
+  try {
+    const r = await fetch('/api/bandwidth/state');
+    if (!r.ok) return;
+    renderBandwidthGovernorStatus(await r.json());
+  } catch {}
+}
+
+function renderBandwidthGovernorStatus(s) {
+  const el = document.getElementById('bandwidth-governor-status');
+  if (!el || !s) return;
+  const band = s.band || 'unknown';
+  if (band === 'ok' || band === 'unknown') { el.style.display = 'none'; return; }
+  const colors = {
+    warn:     {bg: 'rgba(249,226,175,.10)', fg: 'var(--yellow)', label: 'WARN'},
+    throttle: {bg: 'rgba(250,179,135,.12)', fg: '#fab387',       label: 'THROTTLING'},
+    pause:    {bg: 'rgba(243,139,168,.15)', fg: 'var(--red)',    label: 'PAUSED'},
+  };
+  const c = colors[band] || colors.warn;
+  const action = band === 'pause'
+    ? 'TCG checks are skipped until usage drops or the period rolls over.'
+    : band === 'throttle'
+      ? 'TCG check intervals are being multiplied to slow burn rate.'
+      : 'Approaching cap — checks still running but watch the burn rate.';
+  el.style.display     = '';
+  el.style.background  = c.bg;
+  el.style.color       = c.fg;
+  el.style.borderLeft  = `3px solid ${c.fg}`;
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div><b>${c.label}</b> · ${action}</div>
+      <button class="btn btn-ghost btn-sm" style="font-size:10px;color:${c.fg}"
+        onclick="toggleBandwidthOverride()">Override</button>
+    </div>`;
+}
+
+async function toggleBandwidthOverride() {
+  await fetch('/api/bandwidth/override', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({override: true}),
+  });
+  loadBandwidthGovernorStatus();
+}
+
 async function debugProxyBandwidth(provider) {
   const dbg = document.getElementById('proxycheap-bw-debug');
   if (!dbg) return;
@@ -3573,8 +3826,10 @@ async function loadProxyBandwidth(provider) {
       const bar = `<div style="height:6px;background:var(--surface3);border-radius:3px;overflow:hidden">
           <div style="width:${barFill}%;height:100%;background:${barColor};transition:width .3s"></div>
         </div>`;
+      const projLine = (p.projected_gb != null && total != null)
+        ? `<span style="color:${p.projected_gb > total ? 'var(--red)' : 'var(--muted)'}"> · projected ${fmt(p.projected_gb)} this period${p.projected_gb > total ? ' ⚠' : ''}</span>` : '';
       const remLine = remaining != null
-        ? `<div style="font-size:10px;color:var(--muted);margin-top:3px">${fmt(remaining)} remaining</div>` : '';
+        ? `<div style="font-size:10px;color:var(--muted);margin-top:3px">${fmt(remaining)} remaining${projLine}</div>` : '';
       return `<div style="margin-bottom:8px">${headerLine}${bar}${remLine}</div>`;
     }).join('');
   } catch (e) {
@@ -3591,6 +3846,13 @@ async function saveSettingsModal() {
     browser_channel: document.getElementById('set-browser-channel').value,
     proxy: document.getElementById('set-proxy').value.split(String.fromCharCode(10)).map(s=>s.trim()).filter(Boolean),
     webshare_api_key: document.getElementById('set-webshare-key').value.trim(),
+    bandwidth_throttle: {
+      enabled:             document.getElementById('set-bw-enabled').checked,
+      warn_pct:            parseInt(document.getElementById('set-bw-warn').value) || 70,
+      throttle_pct:        parseInt(document.getElementById('set-bw-throttle').value) || 85,
+      pause_pct:           parseInt(document.getElementById('set-bw-pause').value) || 95,
+      throttle_multiplier: parseFloat(document.getElementById('set-bw-multiplier').value) || 2.0,
+    },
     page_timeout_ms: parseInt(document.getElementById('set-page-timeout').value) || 30000,
     network_timeout_seconds: parseInt(document.getElementById('set-network-timeout').value) || 15,
     schedule_enabled: document.getElementById('set-schedule-enabled').checked,
@@ -3605,6 +3867,7 @@ async function saveSettingsModal() {
     dm_user_id: document.getElementById('set-dm-user-id').value.trim(),
     discord_email: document.getElementById('set-discord-email').value.trim(),
     discord_password: document.getElementById('set-discord-password').value.trim(),
+    discord_headless: document.getElementById('set-discord-headless').checked,
     research_enabled: document.getElementById('set-research-enabled').checked,
     research_api_key: document.getElementById('set-research-api-key').value.trim(),
     research_interval_hours: parseInt(document.getElementById('set-research-interval').value) || 168,
@@ -4149,7 +4412,7 @@ let _activeTab = 'products';
 
 function switchTab(tab) {
   _activeTab = tab;
-  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence', 'research']) {
+  for (const t of ['deals', 'products', 'tcgplayer', 'graded', 'portfolio', 'intelligence', 'research', 'accounts']) {
     document.getElementById(`tab-${t}`)?.classList.toggle('active', tab === t);
     document.getElementById(`panel-${t}`)?.classList.toggle('active', tab === t);
   }
@@ -4169,6 +4432,7 @@ function switchTab(tab) {
   if (tab === 'portfolio')    loadPortfolio();
   if (tab === 'research')     loadResearch();
   if (tab === 'products')     renderHubGrid();
+  if (tab === 'accounts')   { loadAccounts(); loadOrders(); }
 }
 
 // ── Product Hub (Watchlist) ──────────────────────────────────────
@@ -4534,6 +4798,8 @@ function switchHubDetailTab(tab) {
 function _renderHubDetail() {
   const entry = hubEntries.find(e => e.id === _hubDetailId);
   if (!entry) return;
+  // Load accounts list once so the Auto-ATC picker has data to render
+  if (!Array.isArray(accounts) || !accounts.length) loadAccounts();
   const p = (entry.tcgplayer_index != null) ? (products[entry.tcgplayer_index] || null) : null;
 
   // Header
@@ -4816,6 +5082,52 @@ function _hubDetailDealsHTML(entry) {
     const noAtcNote = (!groups.length && masterOn)
       ? `<div style="font-size:11px;color:var(--muted);font-style:italic;margin-top:8px">No ATC links seen yet — alert will fire automatically when a deal with Add-to-Cart links arrives.</div>`
       : '';
+    // Account picker — fire automated ATC across logged-in accounts when a deal hits
+    const eligibleAccounts = (accounts || []).filter(a =>
+      ['amazon', 'bestbuy'].includes(a.retailer) && a.enabled !== false);
+    const linkedAccountIds = new Set(entry.auto_atc_account_ids || []);
+    const ridMap = entry.retailer_product_ids || {};
+    let accountPickerSection = '';
+    if (eligibleAccounts.length) {
+      // Group by retailer for cleaner UI
+      const byRetailer = {};
+      for (const a of eligibleAccounts) {
+        (byRetailer[a.retailer] = byRetailer[a.retailer] || []).push(a);
+      }
+      const retailerLabels = {amazon: 'Amazon (ASIN)', bestbuy: 'Best Buy (SKU)'};
+      const sections = Object.entries(byRetailer).map(([retailer, list]) => {
+        const idSet = !!ridMap[retailer];
+        const idWarning = !idSet
+          ? `<div style="font-size:10px;color:var(--yellow);margin-top:2px">⚠ No ${retailer} ID on this item — fallback uses the deal sighting URL when present.</div>`
+          : '';
+        const rows = list.map(a => {
+          const checked = linkedAccountIds.has(a.id);
+          const sessionOk = a.session_exists && a.status === 'ok';
+          const note = sessionOk ? '' : ` <span style="color:var(--yellow);font-size:10px">(not logged in — visit Accounts tab)</span>`;
+          return `<label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:3px 0">
+            <input type="checkbox" class="hub-auto-atc-acc" data-acc-id="${esc(a.id)}" ${checked ? 'checked' : ''}
+              onchange="_hubSaveAutoAtcAccounts('${entry.id}')">
+            <span style="font-weight:600">${esc(a.name)}</span>
+            <span style="color:var(--muted);font-size:11px">${esc(a.email)}</span>
+            ${note}
+          </label>`;
+        }).join('');
+        return `<div style="margin-top:8px">
+          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">${esc(retailerLabels[retailer] || retailer)}</div>
+          ${rows}${idWarning}
+        </div>`;
+      }).join('');
+      accountPickerSection = `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Auto-Fire to Accounts</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">When a new sighting arrives, the app will headlessly run Add-to-Cart through each selected account. Banner still shows. Cooldown 30 min · daily cap 1 successful ATC per account per product.</div>
+        ${sections}
+      </div>`;
+    } else {
+      accountPickerSection = `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)">
+        No accounts configured yet. Add one in the <b>Accounts</b> tab to enable auto-fire.
+      </div>`;
+    }
+
     toggleSection = `<div style="background:var(--surface2);border-radius:8px;padding:12px 14px;margin-bottom:14px">
       <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Auto ATC Trigger</div>
       <div style="font-size:11px;color:var(--muted);margin-bottom:10px">When a new matching deal arrives, an alert banner appears at the top of the Watchlist tab with a direct Add-to-Cart button. Enable per retailer below.</div>
@@ -4826,6 +5138,7 @@ function _hubDetailDealsHTML(entry) {
       </label>
       ${masterOn && retailerRows ? `<div style="display:flex;gap:14px;flex-wrap:wrap;padding-left:4px">${retailerRows}</div>` : ''}
       ${noAtcNote}
+      ${accountPickerSection}
     </div>`;
   }
 
@@ -4942,9 +5255,20 @@ function _hubDetailLinksHTML(entry, p) {
            title="${isConfirmed ? 'Confirmed — click to unlock' : 'Confirm this link (locks it to this item)'}"
            onclick="toggleConfirmHubRetailerId('${entry.id}','${r.key}',${!isConfirmed})">${isConfirmed ? '🔒' : '🔓'}</button>`
       : '';
+    let autoBtn = '';
+    if (val && r.key === 'amazon') {
+      autoBtn = `<button class="btn btn-primary btn-sm" style="font-size:10px;background:#1a3020;color:var(--green);border-color:var(--gold-dim)"
+           title="Send to one or more logged-in accounts via the Accounts tab"
+           onclick="openAtcPicker({label: ${JSON.stringify(entry.name)}, asin: '${esc(val)}', retailer: 'amazon'})">⚡ Auto ATC</button>`;
+    } else if (val && r.key === 'bestbuy') {
+      autoBtn = `<button class="btn btn-primary btn-sm" style="font-size:10px;background:#1a3020;color:var(--green);border-color:var(--gold-dim)"
+           title="Send to one or more logged-in accounts via the Accounts tab"
+           onclick="openAtcPicker({label: ${JSON.stringify(entry.name)}, sku: '${esc(val)}', retailer: 'bestbuy'})">⚡ Auto ATC</button>`;
+    }
     const actionBtns = val
       ? `<a href="${r.listFn(val)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:10px">View →</a>
          <a href="${r.atcFn(val)}" target="_blank" class="btn btn-primary btn-sm" style="font-size:10px">Add to Cart</a>
+         ${autoBtn}
          ${!isConfirmed ? `<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" title="Clear this ID and never auto-fill it again"
            onclick="ignoreHubRetailerId('${entry.id}','${r.key}','${esc(val)}')">Unmap &amp; Ignore</button>` : ''}`
       : '';
@@ -8044,7 +8368,22 @@ async function searchDiscordLog() {
       ? `<span style="color:var(--yellow);font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.reason)}">${esc(r.reason)}</span>`
       : '';
     const assignBtn = _buildDiscordAssignBtn(r, retailer);
-    return `<div style="display:grid;grid-template-columns:50px 50px 55px 60px 60px 160px 1fr 70px;gap:6px;align-items:flex-start;font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
+    // Pull an ASIN out of the message fields if retailer is Amazon
+    let asinForAtc = '';
+    if (retailer === 'Amazon') {
+      const m = (r.embed_fields || '').match(/(?:ASIN|SKU):\s*(?:```)?([A-Z0-9]{10})/i);
+      if (m) asinForAtc = m[1];
+      else if (productUrl) {
+        const m2 = productUrl.match(/\/dp\/([A-Z0-9]{10})/i);
+        if (m2) asinForAtc = m2[1];
+      }
+    }
+    const atcBtn = asinForAtc
+      ? `<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;flex-shrink:0;color:var(--green)"
+            title="Send to logged-in accounts (Auto ATC)"
+            onclick="event.stopPropagation();openAtcPicker({label: ${JSON.stringify(title)}, asin: '${esc(asinForAtc)}', retailer:'amazon'})">⚡ ATC</button>`
+      : '';
+    return `<div style="display:grid;grid-template-columns:50px 50px 55px 60px 60px 160px 1fr 70px 60px;gap:6px;align-items:flex-start;font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
       <span style="color:${color};font-weight:700;font-size:9px">${badge}</span>
       <span style="color:var(--muted)">${priceStr}</span>
       <span>${scoreBadge}</span>
@@ -8056,6 +8395,7 @@ async function searchDiscordLog() {
         <div style="color:var(--muted);font-size:9px">${esc(r.author)} · ${time}</div>
       </div>
       <div style="display:flex;justify-content:flex-end">${assignBtn}</div>
+      <div style="display:flex;justify-content:flex-end">${atcBtn}</div>
     </div>`;
   }).join('');
 }
@@ -8692,6 +9032,439 @@ async function submitSetupWizard() {
 
 let _researchFindings = [];
 let _researchRuns = [];
+
+// ── Accounts (checkout automation) ─────────────────────────────────
+let accounts = [];
+let _editingAccountId = null;
+const _openAccountBrowsers = new Set();   // account ids whose visible browser is open
+
+async function toggleAccountBrowser(id) {
+  try {
+    const r = await fetch(`/api/accounts/${id}/toggle-browser`, {method: 'POST'});
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({detail: r.statusText}));
+      _showToast('Toggle failed: ' + (err.detail || r.statusText), 'error');
+      return;
+    }
+    const data = await r.json();
+    if (data.open) _openAccountBrowsers.add(id); else _openAccountBrowsers.delete(id);
+    renderAccountsList();
+  } catch (e) {
+    _showToast(String(e), 'error');
+  }
+}
+
+// ── Order History ─────────────────────────────────────────────────
+async function loadOrders() {
+  const params = new URLSearchParams();
+  const action   = document.getElementById('orders-filter-action').value;
+  const success  = document.getElementById('orders-filter-success').value;
+  const source   = document.getElementById('orders-filter-source').value;
+  const retailer = document.getElementById('orders-filter-retailer').value;
+  const search   = document.getElementById('orders-filter-search').value.trim();
+  if (action)   params.set('action', action);
+  if (success)  params.set('success', success);
+  if (source)   params.set('source', source);
+  if (retailer) params.set('retailer', retailer);
+  if (search)   params.set('search', search);
+  params.set('limit', '200');
+  try {
+    const r = await fetch('/api/orders?' + params.toString());
+    if (!r.ok) return;
+    renderOrdersList(await r.json());
+  } catch (e) {
+    console.error('loadOrders failed', e);
+  }
+}
+
+function renderOrdersList(data) {
+  const list  = document.getElementById('orders-list');
+  const stats = document.getElementById('orders-stats');
+  if (!list) return;
+  const rows = data.orders || [];
+  const s = data.stats || {};
+  if (stats) {
+    const total      = s.total      || 0;
+    const successes  = s.successes  || 0;
+    const atcCount   = s.atc_count  || 0;
+    const checkoutCt = s.checkout_count || 0;
+    stats.textContent = total
+      ? `${total} total · ${successes} success · ${atcCount} ATC · ${checkoutCt} checkout`
+      : '';
+  }
+  if (!rows.length) {
+    list.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:12px">No orders yet.</div>`;
+    return;
+  }
+  list.innerHTML = `<div style="display:grid;grid-template-columns:130px 70px 110px 60px 1fr 80px 90px 60px;gap:6px;padding:6px 12px;font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;background:var(--surface3);position:sticky;top:0;z-index:1">
+    <span>Time</span><span>Action</span><span>Account</span><span>Retailer</span><span>Product</span><span>Total</span><span>Order ID</span><span>Source</span>
+  </div>` + rows.map(r => {
+    const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : '';
+    const success = !!r.success;
+    const sColor = success ? 'var(--green)' : 'var(--red)';
+    const actionColor = r.action === 'checkout' ? 'var(--gold)' : (r.action === 'clear_cart' ? 'var(--muted)' : 'var(--blue)');
+    const totalStr = r.total != null ? `$${Number(r.total).toFixed(2)}` : '';
+    const orderIdStr = r.order_id ? `#${esc(String(r.order_id))}` : '';
+    const productStr = r.product_label || r.identifier || '';
+    const msg = r.message || '';
+    const sourceColor = r.source === 'auto' ? 'var(--purple)' : 'var(--muted)';
+    return `<div style="display:grid;grid-template-columns:130px 70px 110px 60px 1fr 80px 90px 60px;gap:6px;padding:6px 12px;font-size:11px;align-items:start;border-bottom:1px solid var(--border)" title="${esc(msg)}">
+      <span style="color:var(--muted);font-size:10px">${esc(ts)}</span>
+      <span style="display:flex;align-items:center;gap:4px">
+        <span style="color:${sColor};font-weight:700;font-size:10px">${success ? '✓' : '✗'}</span>
+        <span style="color:${actionColor};text-transform:uppercase;font-size:9px;font-weight:700;letter-spacing:.04em">${esc(r.action || '')}</span>
+      </span>
+      <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.account_name || r.account_id || '')}</span>
+      <span style="color:var(--muted);font-size:10px">${esc(r.retailer || '')}</span>
+      <div style="min-width:0">
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(productStr)}</div>
+        <div style="color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(msg)}</div>
+      </div>
+      <span style="font-family:monospace;font-size:11px">${totalStr}</span>
+      <span style="font-family:monospace;font-size:10px;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${orderIdStr}</span>
+      <span style="color:${sourceColor};font-size:10px">${esc(r.source || 'manual')}</span>
+    </div>`;
+  }).join('');
+}
+
+async function loadAccounts() {
+  try {
+    const r = await fetch('/api/accounts');
+    if (!r.ok) return;
+    const data = await r.json();
+    accounts = data.accounts || [];
+    renderAccountsList();
+  } catch (e) {
+    console.error('loadAccounts failed', e);
+  }
+}
+
+function renderAccountsList() {
+  const el = document.getElementById('accounts-list');
+  if (!el) return;
+  if (!accounts.length) {
+    el.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:12px;background:var(--surface2);border-radius:8px">
+      No accounts yet. Click <b>+ Add Account</b> to create one.
+    </div>`;
+    return;
+  }
+  const statusColors = {
+    ok:            {bg: '#1a3020', fg: 'var(--green)',  label: 'LOGGED IN'},
+    unknown:       {bg: 'var(--surface3)', fg: 'var(--muted)', label: 'UNKNOWN'},
+    logging_in:    {bg: '#2a2a1e', fg: 'var(--yellow)', label: 'LOGGING IN'},
+    awaiting_login:{bg: '#2a2a1e', fg: 'var(--yellow)', label: 'AWAITING LOGIN'},
+    expired:       {bg: '#2a1020', fg: 'var(--red)',    label: 'EXPIRED'},
+    error:         {bg: '#2a1020', fg: 'var(--red)',    label: 'ERROR'},
+  };
+  el.innerHTML = accounts.map(a => {
+    const st = statusColors[a.status] || statusColors.unknown;
+    const sessionTag = a.session_exists
+      ? `<span style="font-size:10px;color:var(--muted)">session saved</span>`
+      : `<span style="font-size:10px;color:var(--yellow)">no session yet</span>`;
+    const lastLogin = a.last_login
+      ? `<span style="font-size:10px;color:var(--muted)" title="${esc(a.last_login)}">· last ${esc(a.last_login.slice(0,10))}</span>` : '';
+    const errLine = a.last_error
+      ? `<div style="font-size:11px;color:var(--red);margin-top:4px">${esc(a.last_error)}</div>` : '';
+    return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="background:${st.bg};color:${st.fg};font-size:9px;font-weight:700;padding:3px 7px;border-radius:4px;letter-spacing:.04em">${st.label}</span>
+        <strong style="font-size:13px">${esc(a.name)}</strong>
+        <span style="font-size:11px;color:var(--muted)">${esc(a.retailer)}</span>
+        <span style="font-size:11px;color:var(--muted)">· ${esc(a.email)}</span>
+        ${sessionTag} ${lastLogin}
+        <div style="margin-left:auto;display:flex;gap:4px">
+          <button class="btn btn-primary btn-sm" style="font-size:10px" onclick="loginAccount('${esc(a.id)}')">${a.status === 'ok' ? 'Re-login' : 'Login'}</button>
+          <button class="btn btn-ghost btn-sm" style="font-size:10px${_openAccountBrowsers.has(a.id) ? ';color:var(--green);border-color:var(--gold-dim)' : ''}"
+            onclick="toggleAccountBrowser('${esc(a.id)}')"
+            title="${_openAccountBrowsers.has(a.id) ? 'Close the open browser window' : 'Open a visible Chrome window with this account session'}">${_openAccountBrowsers.has(a.id) ? 'Hide' : 'Show'}</button>
+          <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="openEditAccountModal('${esc(a.id)}')">Edit</button>
+          <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" onclick="deleteAccount('${esc(a.id)}')">Delete</button>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;font-family:monospace">proxy: ${esc(a.proxy)}</div>
+      ${errLine}
+    </div>`;
+  }).join('');
+}
+
+function _toggleAccProxy(noProxy) {
+  const inp = document.getElementById('acc-proxy');
+  if (noProxy) {
+    inp.value = '';
+    inp.disabled = true;
+    inp.placeholder = '(home IP — no proxy)';
+  } else {
+    inp.disabled = false;
+    inp.placeholder = '150.241.111.51:6555:nbgpeuwf:secret  (or leave blank)';
+  }
+}
+
+function openAddAccountModal() {
+  _editingAccountId = null;
+  document.getElementById('account-modal-title').textContent = 'Add Account';
+  document.getElementById('acc-retailer').value = 'amazon';
+  document.getElementById('acc-name').value = '';
+  document.getElementById('acc-email').value = '';
+  document.getElementById('acc-password').value = '';
+  document.getElementById('acc-proxy').value = '';
+  document.getElementById('acc-no-proxy').checked = false;
+  _toggleAccProxy(false);
+  document.getElementById('acc-enabled').checked = true;
+  document.getElementById('account-modal').style.display = 'flex';
+}
+
+function openEditAccountModal(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!a) return;
+  _editingAccountId = id;
+  document.getElementById('account-modal-title').textContent = 'Edit Account';
+  document.getElementById('acc-retailer').value = a.retailer;
+  document.getElementById('acc-name').value = a.name;
+  document.getElementById('acc-email').value = a.email;
+  document.getElementById('acc-password').value = '';  // never reveal — leave blank to keep current
+  document.getElementById('acc-password').placeholder = '(unchanged)';
+  const hasProxy = !!a.proxy;
+  document.getElementById('acc-no-proxy').checked = !hasProxy;
+  _toggleAccProxy(!hasProxy);
+  document.getElementById('acc-proxy').value = (a.proxy && !a.proxy.includes('***')) ? a.proxy : '';
+  if (hasProxy) {
+    document.getElementById('acc-proxy').placeholder = a.proxy.includes('***') ? a.proxy + ' (leave blank to keep)' : '';
+  }
+  document.getElementById('acc-enabled').checked = a.enabled !== false;
+  document.getElementById('account-modal').style.display = 'flex';
+}
+
+function closeAccountModal() {
+  document.getElementById('account-modal').style.display = 'none';
+  document.getElementById('acc-password').placeholder = '';
+  document.getElementById('acc-proxy').placeholder = '';
+}
+
+async function saveAccountModal() {
+  const noProxy = document.getElementById('acc-no-proxy').checked;
+  const body = {
+    retailer: document.getElementById('acc-retailer').value,
+    name:     document.getElementById('acc-name').value.trim(),
+    email:    document.getElementById('acc-email').value.trim(),
+    password: document.getElementById('acc-password').value,
+    proxy:    noProxy ? '' : document.getElementById('acc-proxy').value.trim(),
+    enabled:  document.getElementById('acc-enabled').checked,
+  };
+  let url = '/api/accounts';
+  let method = 'POST';
+  if (_editingAccountId) {
+    url = `/api/accounts/${_editingAccountId}`;
+    method = 'PUT';
+    // On edit: only "keep current" if user didn't actively check "no proxy"
+    // and left the field blank. If "no proxy" is explicitly checked, send empty
+    // string to clear it on the backend.
+    if (!noProxy && !body.proxy) delete body.proxy;
+    if (!body.password) delete body.password;  // password blank = keep current
+  }
+  const r = await fetch(url, {
+    method,
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({detail: r.statusText}));
+    alert('Save failed: ' + (err.detail || r.statusText));
+    return;
+  }
+  closeAccountModal();
+  loadAccounts();
+}
+
+async function loginAccount(id) {
+  await fetch(`/api/accounts/${id}/login`, {method: 'POST'});
+  // Status updates flow in via WebSocket account_update broadcasts
+}
+
+async function checkAccount(id) {
+  await fetch(`/api/accounts/${id}/check`, {method: 'POST'});
+}
+
+async function _hubSaveAutoAtcAccounts(entryId) {
+  const ids = [...document.querySelectorAll('.hub-auto-atc-acc:checked')]
+    .map(cb => cb.dataset.accId);
+  await fetch(`/api/product-hub/${entryId}/auto-atc-accounts`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({account_ids: ids}),
+  });
+}
+
+// ── ATC Picker (manual checkout phase 2) ───────────────────────────
+let _atcContext = null;  // {label, url, asin, defaultQty}
+
+function openAtcPicker(ctx) {
+  // ctx: {label: string, url?: string, asin?: string, defaultQty?: int, retailer?: 'amazon'}
+  _atcContext = ctx || {};
+  // If we don't have accounts loaded yet, fetch first
+  const ensure = (Array.isArray(accounts) && accounts.length) ? Promise.resolve() : loadAccounts();
+  ensure.then(() => _renderAtcPicker());
+}
+
+function _renderAtcPicker() {
+  const ctx = _atcContext || {};
+  document.getElementById('atc-target-summary').innerHTML =
+    ctx.label ? `Sending: <b>${esc(ctx.label)}</b>` : '';
+  document.getElementById('atc-url').value = ctx.url || ctx.asin || ctx.sku || '';
+  document.getElementById('atc-qty').value = ctx.defaultQty || 1;
+  document.getElementById('atc-headless').checked = true;
+  document.getElementById('atc-checkout').checked = false;
+  document.getElementById('atc-auto-confirm').checked = false;
+  document.getElementById('atc-max-total').value = '';
+  document.getElementById('atc-checkout-options').style.display = 'none';
+  // Wire the toggle (safe to wire repeatedly — onchange replaces previous)
+  document.getElementById('atc-checkout').onchange = (e) => {
+    document.getElementById('atc-checkout-options').style.display = e.target.checked ? '' : 'none';
+  };
+  document.getElementById('atc-results').style.display = 'none';
+  document.getElementById('atc-results').innerHTML = '';
+  document.getElementById('atc-go-btn').disabled = false;
+
+  // Filter accounts by retailer (default amazon) and status
+  const wantRetailer = ctx.retailer || 'amazon';
+  const eligible = (accounts || []).filter(a => a.retailer === wantRetailer && a.enabled !== false);
+  const list = document.getElementById('atc-account-list');
+  if (!eligible.length) {
+    list.innerHTML = `<div style="font-size:11px;color:var(--muted);padding:8px">
+      No ${esc(wantRetailer)} accounts. Add one in the <b>Accounts</b> tab and log in first.
+    </div>`;
+  } else {
+    list.innerHTML = eligible.map(a => {
+      const ok = a.status === 'ok';
+      const sessionOk = a.session_exists;
+      const warn = !ok || !sessionOk;
+      const badge = ok ? `<span style="color:var(--green);font-size:10px;font-weight:700">●</span>`
+                       : `<span style="color:var(--yellow);font-size:10px;font-weight:700">●</span>`;
+      const note = !sessionOk ? ' <span style="color:var(--yellow);font-size:10px">no session — login first</span>'
+                  : !ok      ? ' <span style="color:var(--yellow);font-size:10px">status: ' + esc(a.status) + '</span>'
+                  : '';
+      return `<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--surface3);border-radius:4px;cursor:${sessionOk ? 'pointer' : 'not-allowed'};${warn ? 'opacity:0.7' : ''}">
+        <input type="checkbox" class="atc-acc-cb" data-account-id="${esc(a.id)}" ${sessionOk ? 'checked' : 'disabled'}>
+        ${badge}
+        <span style="font-size:12px;font-weight:600">${esc(a.name)}</span>
+        <span style="font-size:10px;color:var(--muted)">${esc(a.email)}</span>
+        ${note}
+      </label>`;
+    }).join('');
+  }
+
+  document.getElementById('atc-picker-modal').style.display = 'flex';
+}
+
+function closeAtcPickerModal() {
+  document.getElementById('atc-picker-modal').style.display = 'none';
+}
+
+async function runAtcPicker() {
+  const url = document.getElementById('atc-url').value.trim();
+  const qty = parseInt(document.getElementById('atc-qty').value) || 1;
+  const headless = document.getElementById('atc-headless').checked;
+  const doCheckout  = document.getElementById('atc-checkout').checked;
+  const autoConfirm = document.getElementById('atc-auto-confirm').checked;
+  const maxTotalRaw = document.getElementById('atc-max-total').value.trim();
+  const maxTotal    = maxTotalRaw ? parseFloat(maxTotalRaw) : null;
+  const ids = [...document.querySelectorAll('.atc-acc-cb:checked')]
+    .map(cb => cb.dataset.accountId);
+  if (!url)        { alert('Enter a product URL, ASIN, or SKU'); return; }
+  if (!ids.length) { alert('Select at least one account'); return; }
+  if (doCheckout && autoConfirm && (maxTotal == null || isNaN(maxTotal) || maxTotal <= 0)) {
+    alert('Auto-confirm requires a max total cap (e.g. 500.00) for safety.');
+    return;
+  }
+
+  // Detect identifier type — Amazon ASIN (10-char alnum) or Best Buy SKU (6-8 digits)
+  const isAsin    = /^[A-Z0-9]{10}$/.test(url);
+  const isSku     = /^\d{6,8}$/.test(url);
+  const isHttpUrl = /^https?:\/\//i.test(url);
+  const body = {account_ids: ids, quantity: qty, headless};
+  if (isHttpUrl)    body.url  = url;
+  else if (isAsin)  body.asin = url;
+  else if (isSku)   body.sku  = url;
+  else              body.url  = url;
+  const expectedAsin = isAsin ? url : null;
+
+  const btn = document.getElementById('atc-go-btn');
+  btn.disabled = true;
+  btn.textContent = doCheckout ? 'Sending + checking out…' : 'Sending…';
+
+  const out = document.getElementById('atc-results');
+  out.style.display = '';
+  out.innerHTML = `<div style="color:var(--muted)">Running ATC across ${ids.length} account${ids.length>1?'s':''}…</div>`;
+
+  try {
+    const r = await fetch('/api/accounts/atc-batch', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({detail: r.statusText}));
+      out.innerHTML = `<div style="color:var(--red)">Failed: ${esc(err.detail || r.statusText)}</div>`;
+      return;
+    }
+    const data = await r.json();
+    const atcRows = (data.results || []).map(rr => `
+      <div style="padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:6px">
+        <span style="color:${rr.success ? 'var(--green)' : 'var(--red)'};font-weight:700;flex-shrink:0;font-size:10px">${rr.success ? '✓' : '✗'}</span>
+        <span style="font-weight:600;flex-shrink:0">${esc(rr.name)}</span>
+        <span style="color:var(--muted);min-width:0">ATC: ${esc(rr.message || '')}</span>
+      </div>`).join('');
+    out.innerHTML = `
+      <div style="margin-bottom:6px"><b>${data.succeeded}/${data.total}</b> succeeded ATC</div>
+      ${atcRows}`;
+
+    // Chain to checkout for the accounts that succeeded ATC
+    if (doCheckout) {
+      const successfulIds = (data.results || []).filter(r => r.success).map(r => r.account_id);
+      if (!successfulIds.length) {
+        out.innerHTML += `<div style="margin-top:8px;color:var(--yellow)">No successful ATCs — skipping checkout.</div>`;
+        return;
+      }
+      out.innerHTML += `<div style="margin-top:8px;color:var(--muted)">Running checkout for ${successfulIds.length} account${successfulIds.length>1?'s':''}…</div>`;
+      // Run checkouts sequentially per account so the visible browsers don't all open at once
+      for (const accId of successfulIds) {
+        const accName = (data.results || []).find(r => r.account_id === accId)?.name || accId;
+        const co = await fetch(`/api/accounts/${accId}/checkout`, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            auto_confirm: autoConfirm,
+            max_total: maxTotal,
+            expected_asin: expectedAsin,
+            headless: autoConfirm ? headless : false,  // manual review needs visible
+          }),
+        });
+        let coData;
+        try { coData = await co.json(); }
+        catch { coData = {success: false, message: co.statusText}; }
+        const totalStr = coData.total != null ? ` ($${Number(coData.total).toFixed(2)})` : '';
+        const orderStr = coData.order_id ? ` · order #${esc(coData.order_id)}` : '';
+        out.innerHTML += `
+          <div style="padding:4px 0;border-top:1px dashed var(--border);display:flex;gap:6px">
+            <span style="color:${coData.success ? 'var(--green)' : 'var(--red)'};font-weight:700;flex-shrink:0;font-size:10px">${coData.success ? '✓' : '✗'}</span>
+            <span style="font-weight:600;flex-shrink:0">${esc(accName)}</span>
+            <span style="color:var(--muted);min-width:0">Checkout: ${esc(coData.message || '?')}${totalStr}${orderStr}</span>
+          </div>`;
+      }
+    }
+  } catch (e) {
+    out.innerHTML = `<div style="color:var(--red)">Error: ${esc(String(e))}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send';
+  }
+}
+
+async function deleteAccount(id) {
+  const a = accounts.find(x => x.id === id);
+  if (!confirm(`Delete account "${a?.name || id}"? Its saved session will also be deleted.`)) return;
+  await fetch(`/api/accounts/${id}`, {method: 'DELETE'});
+  loadAccounts();
+}
 
 async function loadResearch() {
   try {

@@ -35,6 +35,18 @@ import aiosqlite
 import db as price_db
 
 from monitors.manapool_monitor import ManaPoolMonitor
+from monitors.account_manager import (
+    account_manager, set_data_dir as set_accounts_data_dir,
+    STATUS_OK, STATUS_AWAITING, STATUS_LOGGING, STATUS_ERROR, STATUS_EXPIRED, STATUS_UNKNOWN,
+)
+from monitors.retailers import amazon as amazon_retailer
+from monitors.retailers import bestbuy as bestbuy_retailer
+
+# Map retailer key -> module so endpoints can dispatch generically
+_RETAILER_MODULES = {
+    "amazon":  amazon_retailer,
+    "bestbuy": bestbuy_retailer,
+}
 
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 _tcgplayer = TCGPlayerMonitor()
@@ -324,6 +336,8 @@ async def discord_gateway_loop():
                         "type": "tracked_deal_update",
                         "data": tracked.to_dict(),
                     })
+                    # Phase 4 — auto-fire ATC to configured accounts
+                    asyncio.create_task(_maybe_auto_fire_atc(tracked, entry))
 
                     # DM notification — send for all shown/tracked deals
                     dm_user = config.get("discord", {}).get("dm_user_id")
@@ -531,6 +545,16 @@ async def _check_product(i: int, ps, sem: asyncio.Semaphore,
                 await app_state.update_product(i, checking=False)
                 _schedule_next(next_check_at, i, ps.check_interval or global_iv, jitter_pct)
                 return
+
+            # Bandwidth governor — only TCGPlayer goes through the proxy. ManaPool
+            # uses its own direct API and isn't subject to the proxy cap.
+            if ps.site == "tcgplayer":
+                skip, reason = bandwidth_should_skip_proxied_check()
+                if skip:
+                    await app_state.log("warn", f"{ps.name} — {reason}", "tcgplayer")
+                    await app_state.update_product(i, checking=False, last_checked=datetime.now().strftime("%Y-%m-%d %H:%M:%S"), error=reason)
+                    _schedule_next(next_check_at, i, ps.check_interval or global_iv, jitter_pct)
+                    return
 
             result = await mon.check_product(product_cfg, stealth_cfg)
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -792,7 +816,14 @@ async def monitor_loop():
 
 
 def _schedule_next(next_check_at: dict, index: int, interval: int, jitter_pct: int) -> int:
-    """Compute and store next_check_at for a product; return the actual seconds."""
+    """Compute and store next_check_at for a product; return the actual seconds.
+    The bandwidth governor's throttle multiplier is applied to TCG-eligible items
+    so their effective check cadence slows down when bandwidth is approaching the cap."""
+    multiplier = bandwidth_throttle_multiplier()
+    if multiplier > 1.0 and 0 <= index < len(app_state.product_statuses):
+        ps = app_state.product_statuses[index]
+        if ps.site in ("tcgplayer",):
+            interval = int(interval * multiplier)
     jitter   = interval * random.uniform(-jitter_pct / 100, jitter_pct / 100)
     secs     = max(30, int(interval + jitter))
     next_check_at[index] = datetime.now() + timedelta(seconds=secs)
@@ -839,6 +870,11 @@ async def lifespan(app: FastAPI):
     app_state.restore_from_disk()
     deal_tracker.restore_from_disk()
     product_hub.restore_from_disk()
+    # Account manager — checkout automation
+    if data_dir:
+        from pathlib import Path as _P
+        set_accounts_data_dir(_P(data_dir))
+    account_manager.load_from_config(config)
     # Re-apply ignore patterns so restored sales reflect ebay_ignored_titles
     for ps in app_state.product_statuses:
         if ps.ebay_sales and ps.ebay_ignored_titles:
@@ -855,6 +891,7 @@ async def lifespan(app: FastAPI):
 
     app_state._reddit_task  = reddit_task
     app_state._discord_task = discord_task
+    app_state._bandwidth_task = asyncio.create_task(_bandwidth_poll_loop())
 
     # Slow startup work runs in background AFTER server is accepting connections
     async def _post_start_tasks():
@@ -900,6 +937,36 @@ async def lifespan(app: FastAPI):
             await asyncio.gather(*[_cache_one(ps) for ps in remote_images])
             await _progress(f"Cached {total_images} product images", 95, done=True)
 
+        # Account health checks — quick headless probe to verify saved sessions.
+        # Done in parallel; doesn't trigger any login flow even if expired.
+        accs = [a for a in account_manager.accounts if a.enabled]
+        if accs:
+            await _progress(f"Checking {len(accs)} account session(s)…", 96)
+            cfg2     = load_config()
+            stealth2 = cfg2.get("stealth", {}) or {}
+            from monitors.defaults import get_user_agent as _gu, get_browser_channel as _gc
+            ua = _gu(stealth2)
+            ch = _gc(stealth2)
+
+            async def _probe(acc):
+                try:
+                    mod = _RETAILER_MODULES.get(acc.retailer)
+                    if mod:
+                        result = await mod.health_check(acc, ua, ch)
+                    else:
+                        result = STATUS_UNKNOWN
+                except Exception as e:
+                    result = STATUS_ERROR
+                    acc.last_error = str(e)
+                acc.status = result
+                if result == STATUS_OK:
+                    acc.last_error = None
+                await app_state.ws.broadcast({"type": "account_update", "data": acc.to_dict()})
+
+            await asyncio.gather(*[_probe(a) for a in accs])
+            ok_count = sum(1 for a in accs if a.status == STATUS_OK)
+            await _progress(f"{ok_count}/{len(accs)} accounts ready", 99, done=True)
+
         await app_state.ws.broadcast({"type": "startup_complete", "data": None})
         print("  [startup] Ready")
 
@@ -909,7 +976,7 @@ async def lifespan(app: FastAPI):
     deal_tracker.save_to_disk()
     product_hub.save_to_disk()
     app_state.monitor_running = False
-    tasks_to_cancel = [t for t in (app_state._monitor_task, reddit_task, discord_task, research_task) if t]
+    tasks_to_cancel = [t for t in (app_state._monitor_task, reddit_task, discord_task, research_task, app_state._bandwidth_task) if t]
     for t in tasks_to_cancel:
         t.cancel()
         try:
@@ -919,6 +986,10 @@ async def lifespan(app: FastAPI):
     # Clean up Gateway browser if running
     if _discord_gw._browser:
         await _discord_gw.stop()
+    # Close any account browser windows the user opened via the toggle button
+    for aid in list(_open_account_browsers.keys()):
+        try: await _close_open_account_browser(aid)
+        except Exception: pass
 
 app = FastAPI(lifespan=lifespan)
 
@@ -2016,12 +2087,22 @@ async def get_settings():
         "dm_user_id":           config.get("discord", {}).get("dm_user_id") or "",
         "discord_email":        config.get("discord", {}).get("email") or "",
         "discord_password":     config.get("discord", {}).get("password") or "",
+        "discord_headless":     config.get("discord", {}).get("headless", False),
         "research_enabled":      research.get("enabled", False),
         "research_api_key":      research.get("api_key") or "",
         "research_interval_hours": research.get("interval_hours", 168),
         "research_lookback_days":  research.get("lookback_days", 7),
         "research_max_findings":   research.get("max_findings", 7),
         "webshare_api_key":      config.get("webshare", {}).get("api_key") or "",
+        "bandwidth_throttle":    {
+            "enabled":             config.get("bandwidth_throttle", {}).get("enabled", True),
+            "warn_pct":            config.get("bandwidth_throttle", {}).get("warn_pct", 70),
+            "throttle_pct":        config.get("bandwidth_throttle", {}).get("throttle_pct", 85),
+            "pause_pct":           config.get("bandwidth_throttle", {}).get("pause_pct", 95),
+            "throttle_multiplier": config.get("bandwidth_throttle", {}).get("throttle_multiplier", 2.0),
+            "manual_override":     config.get("bandwidth_throttle", {}).get("manual_override", False),
+            "poll_minutes":        config.get("bandwidth_throttle", {}).get("poll_minutes", 10),
+        },
     }
 
 @app.put("/api/settings")
@@ -2075,6 +2156,8 @@ async def update_settings(body: dict):
         config.setdefault("discord", {})["email"] = body["discord_email"].strip() or None
     if "discord_password" in body:
         config.setdefault("discord", {})["password"] = body["discord_password"].strip() or None
+    if "discord_headless" in body:
+        config.setdefault("discord", {})["headless"] = bool(body["discord_headless"])
     # Research agent settings
     rc = config.setdefault("research", {})
     if "research_enabled" in body:
@@ -2090,23 +2173,149 @@ async def update_settings(body: dict):
     ws = config.setdefault("webshare", {})
     if "webshare_api_key" in body:
         ws["api_key"] = body["webshare_api_key"].strip() or None
+    if "bandwidth_throttle" in body and isinstance(body["bandwidth_throttle"], dict):
+        bt = config.setdefault("bandwidth_throttle", {})
+        b  = body["bandwidth_throttle"]
+        if "enabled" in b:             bt["enabled"]             = bool(b["enabled"])
+        if "warn_pct" in b:            bt["warn_pct"]            = max(0, min(100, int(b["warn_pct"])))
+        if "throttle_pct" in b:        bt["throttle_pct"]        = max(0, min(100, int(b["throttle_pct"])))
+        if "pause_pct" in b:           bt["pause_pct"]           = max(0, min(100, int(b["pause_pct"])))
+        if "throttle_multiplier" in b: bt["throttle_multiplier"] = max(1.0, min(10.0, float(b["throttle_multiplier"])))
+        if "manual_override" in b:     bt["manual_override"]     = bool(b["manual_override"])
+        if "poll_minutes" in b:        bt["poll_minutes"]        = max(1, min(60, int(b["poll_minutes"])))
     save_config(config)
     await app_state.log("info", "Settings saved", "system")
     return {"status": "ok"}
 
-@app.get("/api/webshare/bandwidth")
-async def get_webshare_bandwidth(debug: bool = False):
-    """Fetch proxy bandwidth usage from the Webshare REST API. Aggregates data
-    from /subscription/, /subscription/plan/, /proxy/config/ and /proxy/list/."""
-    config = load_config()
-    api_key = config.get("webshare", {}).get("api_key", "")
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Webshare API key not configured")
+# ------------------------------------------------------------------
+# Bandwidth governor — auto-throttle/pause TCG checks near the cap
+# ------------------------------------------------------------------
 
+# Last-known proxy bandwidth state, refreshed by _bandwidth_poll_loop()
+_bw_state: dict = {
+    "fetched_at": None,        # ISO timestamp of last successful poll
+    "total_gb":   None,
+    "used_gb":    None,
+    "projected_gb": None,
+    "pct_used":   None,
+    "period_end": None,        # ISO timestamp from Webshare
+    "band":       "ok",        # ok | warn | throttle | pause | unknown
+    "error":      None,
+}
+
+
+def _bandwidth_governor_band(used_gb, total_gb, cfg) -> str:
+    """Return current threshold band given usage + thresholds."""
+    if not cfg.get("enabled", True):
+        return "ok"
+    if total_gb is None or used_gb is None:
+        return "unknown"
+    pct = (used_gb / total_gb) * 100
+    if pct >= cfg.get("pause_pct", 95):    return "pause"
+    if pct >= cfg.get("throttle_pct", 85): return "throttle"
+    if pct >= cfg.get("warn_pct", 70):     return "warn"
+    return "ok"
+
+
+def _bandwidth_governor_cfg() -> dict:
+    return load_config().get("bandwidth_throttle", {}) or {}
+
+
+def bandwidth_should_skip_proxied_check() -> tuple[bool, str]:
+    """Called by browser monitors before they run a proxied check.
+    Returns (skip: bool, reason: str)."""
+    cfg = _bandwidth_governor_cfg()
+    if not cfg.get("enabled", True) or cfg.get("manual_override"):
+        return False, ""
+    band = _bw_state.get("band") or "unknown"
+    if band == "pause":
+        used = _bw_state.get("used_gb")
+        total = _bw_state.get("total_gb")
+        return True, f"Bandwidth at {used:.1f}/{total:.0f} GB — checks paused (≥{cfg.get('pause_pct', 95)}%)"
+    return False, ""
+
+
+def bandwidth_throttle_multiplier() -> float:
+    """Return the interval multiplier currently in effect (1.0 = no throttle)."""
+    cfg = _bandwidth_governor_cfg()
+    if not cfg.get("enabled", True) or cfg.get("manual_override"):
+        return 1.0
+    if _bw_state.get("band") == "throttle":
+        return float(cfg.get("throttle_multiplier", 2.0))
+    return 1.0
+
+
+async def _bandwidth_poll_loop():
+    """Background task — refreshes the cached bandwidth state every N minutes."""
+    await asyncio.sleep(15)  # let server settle before first call
+    while True:
+        try:
+            cfg = load_config()
+            api_key = cfg.get("webshare", {}).get("api_key", "")
+            interval = int(cfg.get("bandwidth_throttle", {}).get("poll_minutes", 10))
+            if not api_key:
+                _bw_state["band"]  = "unknown"
+                _bw_state["error"] = "no API key"
+                await asyncio.sleep(60)
+                continue
+            try:
+                data = await _fetch_webshare_bandwidth_data(api_key)
+                p = (data.get("proxies") or [{}])[0]
+                prev_band = _bw_state.get("band")
+                _bw_state["fetched_at"] = datetime.now().isoformat()
+                _bw_state["total_gb"]     = p.get("total_gb")
+                _bw_state["used_gb"]      = p.get("used_gb")
+                _bw_state["projected_gb"] = p.get("projected_gb")
+                _bw_state["pct_used"]     = p.get("pct_used")
+                _bw_state["period_end"]   = p.get("expires_at")
+                _bw_state["error"]        = None
+                bt_cfg = cfg.get("bandwidth_throttle", {}) or {}
+                _bw_state["band"] = _bandwidth_governor_band(
+                    p.get("used_gb"), p.get("total_gb"), bt_cfg
+                )
+                if _bw_state["band"] != prev_band:
+                    await app_state.log("info",
+                        f"Bandwidth band: {prev_band} → {_bw_state['band']} "
+                        f"({p.get('used_gb', 0):.2f}/{p.get('total_gb', 0):.0f} GB)",
+                        "bandwidth")
+                    await app_state.ws.broadcast({"type": "bandwidth_state", "data": dict(_bw_state)})
+            except Exception as e:
+                _bw_state["error"] = str(e)
+                _bw_state["band"]  = "unknown"
+                log.debug(f"Bandwidth poll failed: {e}")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(max(60, interval * 60))
+
+
+@app.get("/api/bandwidth/state")
+async def get_bandwidth_state():
+    """Return current cached bandwidth state used by the throttle governor."""
+    return dict(_bw_state)
+
+
+@app.post("/api/bandwidth/override")
+async def toggle_bandwidth_override(body: dict):
+    """Toggle manual override — when on, throttling/pausing is bypassed."""
+    config = load_config()
+    bt = config.setdefault("bandwidth_throttle", {})
+    bt["manual_override"] = bool(body.get("override", False))
+    save_config(config)
+    await app_state.log("info",
+        f"Bandwidth override {'ENABLED — cap will be ignored' if bt['manual_override'] else 'disabled'}",
+        "bandwidth")
+    await app_state.ws.broadcast({"type": "bandwidth_state", "data": dict(_bw_state)})
+    return {"status": "ok", "manual_override": bt["manual_override"]}
+
+
+async def _fetch_webshare_bandwidth_data(api_key: str, debug: bool = False) -> dict:
+    """Internal helper. Returns {proxies: [...], debug?: {...}}.
+    Used both by the public endpoint and the bandwidth governor poll loop."""
     import aiohttp as _aiohttp
     import json as _json
     headers = {"Authorization": f"Token {api_key}", "Accept": "application/json"}
-
     debug_payload: dict = {}
 
     async def _get(session, url):
@@ -2124,48 +2333,57 @@ async def get_webshare_bandwidth(debug: bool = False):
             debug_payload[url] = {"error": str(e)}
         return None
 
+    from datetime import datetime as _dt, timezone as _tz
+    today = _dt.now(_tz.utc).date()
+    month_ago = today.replace(day=1)
+    stats_url = (
+        f"https://proxy.webshare.io/api/v2/stats/aggregate/"
+        f"?date_after={month_ago.isoformat()}&date_before={today.isoformat()}"
+    )
+
     async with _aiohttp.ClientSession() as session:
         sub        = await _get(session, "https://proxy.webshare.io/api/v2/subscription/")
-        plan       = await _get(session, "https://proxy.webshare.io/api/v2/subscription/plan/")
-        proxy_cfg  = await _get(session, "https://proxy.webshare.io/api/v2/proxy/config/")
+        plan_resp  = await _get(session, "https://proxy.webshare.io/api/v2/subscription/plan/")
         proxy_list = await _get(session, "https://proxy.webshare.io/api/v2/proxy/list/?page_size=1&mode=direct")
+        stats      = await _get(session, stats_url)
 
-    # Merge all sources, picking the first non-null/non-zero match for each field
-    def pick(*objs_keys):
-        for o, k in objs_keys:
-            if o and isinstance(o, dict) and o.get(k) not in (None, 0):
-                return o[k]
-        return None
-
-    sources = [sub or {}, plan or {}, proxy_cfg or {}]
-    bw_total = None
-    bw_used  = None
-    for o in sources:
-        for k in ("bandwidth_limit", "bandwidth", "bandwidth_total",
-                  "monthly_bandwidth", "monthly_bandwidth_limit"):
-            if o.get(k) not in (None, 0):
-                bw_total = o[k]
+    active_plan = None
+    if plan_resp and isinstance(plan_resp, dict):
+        results = plan_resp.get("results") or []
+        for p in results:
+            if p.get("status") == "active":
+                active_plan = p
                 break
-        if bw_total: break
-    for o in sources:
-        for k in ("bandwidth_used", "bandwidth_consumed", "used_bandwidth",
-                  "monthly_bandwidth_used"):
-            if o.get(k) is not None:
-                bw_used = o[k]
-                break
-        if bw_used is not None: break
+        if not active_plan and results:
+            active_plan = results[0]
 
-    plan_name = (plan.get("name") if plan else None) or (proxy_cfg.get("plan_name") if proxy_cfg else None) or "Webshare"
-    proxy_count = (proxy_list.get("count") if proxy_list else None) \
-                  or (proxy_cfg.get("proxy_count") if proxy_cfg else None)
-    period_end = sub.get("end_date") if sub else None
+    total_gb = None
+    if active_plan and active_plan.get("bandwidth_limit") not in (None, 0):
+        total_gb = float(active_plan["bandwidth_limit"])
 
-    total_gb = float(bw_total) / 1e9 if bw_total else None
-    used_gb  = float(bw_used)  / 1e9 if bw_used  is not None else 0.0
+    used_gb = 0.0
+    projected_gb = None
+    if stats and isinstance(stats, dict):
+        if stats.get("bandwidth_total") is not None:
+            try: used_gb = float(stats["bandwidth_total"]) / 1e9
+            except (TypeError, ValueError): pass
+        if stats.get("bandwidth_projected") is not None:
+            try: projected_gb = float(stats["bandwidth_projected"]) / 1e9
+            except (TypeError, ValueError): pass
+
     remaining_gb = max(0.0, total_gb - used_gb) if total_gb else None
     pct = round(used_gb / total_gb * 100, 1) if total_gb else None
 
-    label_parts = [str(plan_name)]
+    plan_name = "Webshare"
+    if active_plan:
+        subtype = (active_plan.get("proxy_subtype") or "").upper()
+        ptype   = (active_plan.get("proxy_type") or "").title()
+        plan_name = f"{subtype} {ptype}".strip() or plan_name
+    proxy_count = (proxy_list.get("count") if proxy_list else None) \
+                  or (active_plan.get("proxy_count") if active_plan else None)
+    period_end = sub.get("end_date") if sub else None
+
+    label_parts = [plan_name]
     if proxy_count:
         label_parts.append(f"{proxy_count} IPs")
 
@@ -2178,12 +2396,702 @@ async def get_webshare_bandwidth(debug: bool = False):
         "used_gb": used_gb,
         "remaining_gb": remaining_gb,
         "pct_used": pct,
+        "projected_gb": projected_gb,
     }]
 
     out = {"proxies": proxies}
     if debug:
         out["debug"] = debug_payload
     return out
+
+
+@app.get("/api/webshare/bandwidth")
+async def get_webshare_bandwidth(debug: bool = False):
+    """Fetch proxy bandwidth usage from the Webshare REST API."""
+    config = load_config()
+    api_key = config.get("webshare", {}).get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Webshare API key not configured")
+    return await _fetch_webshare_bandwidth_data(api_key, debug=debug)
+
+
+# ------------------------------------------------------------------
+# Accounts (checkout automation — Phase 1: account CRUD + login)
+# ------------------------------------------------------------------
+
+@app.get("/api/accounts")
+async def list_accounts():
+    """Return account list with masked secrets."""
+    return {"accounts": account_manager.to_dict_list(include_secrets=False)}
+
+
+@app.post("/api/accounts")
+async def create_account(body: dict):
+    retailer = (body.get("retailer") or "").strip().lower()
+    if retailer not in ("amazon", "walmart", "target", "bestbuy"):
+        raise HTTPException(status_code=400, detail="Unsupported retailer")
+    name     = (body.get("name") or "").strip() or f"{retailer.title()} Account"
+    email    = (body.get("email") or "").strip()
+    password = (body.get("password") or "").strip()
+    proxy    = (body.get("proxy") or "").strip()
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email and password required")
+    # proxy is optional — leave blank to use the home IP (less safe; loses
+    # multi-account isolation, but useful for retailers like Best Buy where
+    # Akamai blocks proxied logins regardless of IP quality)
+    enabled  = bool(body.get("enabled", True))
+    acc = account_manager.add(retailer, name, email, password, proxy, enabled)
+    # Persist
+    config = load_config()
+    config["accounts"] = account_manager.to_config_list()
+    save_config(config)
+    await app_state.ws.broadcast({"type": "accounts_full", "data": account_manager.to_dict_list()})
+    await app_state.log("info", f"Account created: {acc.name} ({acc.retailer})", "accounts")
+    return acc.to_dict()
+
+
+@app.put("/api/accounts/{account_id}")
+async def update_account(account_id: str, body: dict):
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if "name" in body:    acc.name = (body["name"] or "").strip() or acc.name
+    if "email" in body:   acc.email = (body["email"] or "").strip()
+    # Only update password if a non-empty value is provided (prevents
+    # accidentally clearing it when the UI sends "" because the field is masked)
+    if body.get("password"):
+        acc.password = body["password"]
+    if "proxy" in body:   acc.proxy = (body["proxy"] or "").strip()
+    if "enabled" in body: acc.enabled = bool(body["enabled"])
+    config = load_config()
+    config["accounts"] = account_manager.to_config_list()
+    save_config(config)
+    await app_state.ws.broadcast({"type": "accounts_full", "data": account_manager.to_dict_list()})
+    return acc.to_dict()
+
+
+@app.delete("/api/accounts/{account_id}")
+async def delete_account(account_id: str):
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    name = acc.name
+    account_manager.remove(account_id)
+    config = load_config()
+    config["accounts"] = account_manager.to_config_list()
+    save_config(config)
+    await app_state.ws.broadcast({"type": "accounts_full", "data": account_manager.to_dict_list()})
+    await app_state.log("info", f"Account deleted: {name}", "accounts")
+    return {"status": "ok"}
+
+
+_account_login_tasks: dict[str, asyncio.Task] = {}
+
+
+@app.post("/api/accounts/{account_id}/login")
+async def trigger_account_login(account_id: str):
+    """Open a visible browser through this account's pinned proxy and either
+    confirm an existing session is still good or wait for the user to log in."""
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    # Avoid concurrent login flows for the same account
+    existing = _account_login_tasks.get(account_id)
+    if existing and not existing.done():
+        return {"status": "already_running"}
+
+    cfg     = load_config()
+    stealth = cfg.get("stealth", {}) or {}
+    from monitors.defaults import get_user_agent, get_browser_channel
+    user_agent     = get_user_agent(stealth)
+    browser_chan   = get_browser_channel(stealth)
+
+    async def _on_status(status: str, message: str):
+        acc.status = status
+        if status == STATUS_OK:
+            acc.last_login = datetime.now().isoformat()
+            acc.last_error = None
+        elif status == STATUS_ERROR:
+            acc.last_error = message
+        await app_state.log("info" if status == STATUS_OK else "warn",
+                            f"[{acc.name}] {message}", "accounts")
+        await app_state.ws.broadcast({"type": "account_update", "data": acc.to_dict()})
+
+    async def _run():
+        mod = _RETAILER_MODULES.get(acc.retailer)
+        if mod:
+            try:
+                ok = await mod.login(acc, user_agent, browser_chan, _on_status)
+                if not ok and acc.status == STATUS_AWAITING:
+                    await _on_status(STATUS_ERROR, "Login did not complete")
+            except Exception as e:
+                await _on_status(STATUS_ERROR, f"Login crashed: {e}")
+        else:
+            await _on_status(STATUS_ERROR, f"Retailer '{acc.retailer}' not yet implemented")
+
+    task = asyncio.create_task(_run())
+    _account_login_tasks[account_id] = task
+    return {"status": "started"}
+
+
+_atc_fire_history: deque = deque(maxlen=2000)
+_AUTO_ATC_COOLDOWN_MIN = 30   # don't re-fire same account+ASIN within this window
+_AUTO_ATC_DAILY_CAP    = 1    # successful ATCs per account+ASIN per UTC day
+
+
+def _atc_can_fire(account_id: str, asin: str) -> tuple[bool, str]:
+    """Check cooldown + daily cap. Returns (allowed, reason_if_not)."""
+    if not asin:
+        return False, "no asin"
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    cooldown_cutoff = now - timedelta(minutes=_AUTO_ATC_COOLDOWN_MIN)
+    today_success = 0
+    for h in _atc_fire_history:
+        if h["account_id"] != account_id or h["asin"] != asin:
+            continue
+        ts = h["timestamp"]
+        if ts >= cooldown_cutoff:
+            return False, f"cooldown ({_AUTO_ATC_COOLDOWN_MIN} min)"
+        if h["success"] and ts.strftime("%Y-%m-%d") == today_str:
+            today_success += 1
+    if today_success >= _AUTO_ATC_DAILY_CAP:
+        return False, f"daily cap reached ({_AUTO_ATC_DAILY_CAP})"
+    return True, ""
+
+
+def _atc_record_fire(account_id: str, asin: str, success: bool) -> None:
+    _atc_fire_history.append({
+        "account_id": account_id,
+        "asin":       asin,
+        "timestamp":  datetime.now(),
+        "success":    success,
+    })
+
+
+async def _review_after_auto_atc(acc, asin: str, entry_name: str) -> None:
+    """After a successful auto-fire ATC, open a visible browser at the order-
+    review page so the user can verify and click Place Your Order. Runs in the
+    background — never blocks the auto-fire dispatch."""
+    try:
+        cfg     = load_config()
+        stealth = cfg.get("stealth", {}) or {}
+        from monitors.defaults import get_user_agent, get_browser_channel
+        user_agent   = get_user_agent(stealth)
+        browser_chan = get_browser_channel(stealth)
+        await app_state.log("info",
+            f"[{acc.name}] opening review browser for '{entry_name}' (ASIN {asin})", "accounts")
+        result = await amazon_retailer.checkout(
+            acc, user_agent, browser_chan,
+            headless=False,           # visible — that's the whole point
+            auto_confirm=False,       # never auto-place from auto-fire path
+            max_total=None,
+            expected_asin=asin,
+        )
+        # Record the review-stage outcome too so the user has full audit trail
+        try:
+            await price_db.record_order(
+                account_id=acc.id, account_name=acc.name, retailer=acc.retailer,
+                identifier=asin, product_label=entry_name,
+                action="checkout", success=bool(result.get("success")),
+                order_id=result.get("order_id"),
+                total=result.get("total"),
+                message=result.get("message"),
+                source="auto",
+            )
+        except Exception:
+            pass
+        await app_state.log(
+            "info" if result.get("success") else "warn",
+            f"[{acc.name}] review: {result.get('message', '?')}", "accounts")
+    except Exception as e:
+        await app_state.log("warn",
+            f"[{acc.name}] review browser failed: {e}", "accounts")
+
+
+async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
+    """If any watchlist entries reference this deal AND have auto_atc_account_ids set,
+    fire ATC across those accounts (subject to cooldown, daily cap, and bandwidth governor)."""
+    try:
+        owners = [e for e in product_hub.entries
+                  if (tracked_deal.id in (e.deal_ids or []))
+                  and (e.auto_atc_account_ids or [])]
+        if not owners:
+            return
+
+        # Bandwidth governor — share the same gate the manual checks use
+        skip, reason = bandwidth_should_skip_proxied_check()
+        if skip:
+            await app_state.log("warn", f"Auto-ATC skipped: {reason}", "accounts")
+            return
+
+        cfg     = load_config()
+        stealth = cfg.get("stealth", {}) or {}
+        from monitors.defaults import get_user_agent, get_browser_channel
+        user_agent   = get_user_agent(stealth)
+        browser_chan = get_browser_channel(stealth)
+
+        # Determine which retailer this NEW sighting is from. Auto-fire should
+        # only target accounts on the same retailer — a Best Buy deal arriving
+        # shouldn't trigger ATC on Amazon accounts using the entry's stored ASIN.
+        new_sighting = (tracked_deal.sightings or [])[0] if tracked_deal.sightings else None
+        deal_retailer_key: str | None = None
+        if new_sighting:
+            label = (new_sighting.retailer or "").strip().lower()
+            url0  = (new_sighting.url or "")
+            # Map by label first
+            if label in ("amazon",):                 deal_retailer_key = "amazon"
+            elif label in ("best buy", "bestbuy"):   deal_retailer_key = "bestbuy"
+            elif label in ("walmart",):              deal_retailer_key = "walmart"
+            elif label in ("target",):               deal_retailer_key = "target"
+            # Fallback: detect by URL host
+            if not deal_retailer_key:
+                if "amazon."  in url0:                  deal_retailer_key = "amazon"
+                elif "bestbuy.com" in url0:             deal_retailer_key = "bestbuy"
+                elif "walmart.com" in url0:             deal_retailer_key = "walmart"
+                elif "target.com" in url0:              deal_retailer_key = "target"
+
+        # Try to extract retailer-specific identifiers from the latest sighting URLs
+        scanned_asin = None
+        scanned_sku  = None
+        for sighting in (tracked_deal.sightings or [])[:5]:
+            url = sighting.url or ""
+            if not scanned_asin:
+                m = re.search(r"/dp/([A-Z0-9]{10})", url);                  scanned_asin = m.group(1) if m else None
+            if not scanned_sku:
+                m = re.search(r"/site/(?:[^/]+/)?(\d{6,8})\.p", url);       scanned_sku  = m.group(1) if m else None
+                if not scanned_sku:
+                    m = re.search(r"skuId=(\d{6,8})", url);                 scanned_sku  = m.group(1) if m else None
+            for cu in (sighting.checkout_urls or []):
+                u = cu.get("url", "")
+                if not scanned_asin:
+                    m = re.search(r"ASIN(?:\.\d+)?=([A-Z0-9]{10})", u);     scanned_asin = m.group(1) if m else None
+                if not scanned_asin:
+                    m = re.search(r"/dp/([A-Z0-9]{10})", u);                scanned_asin = m.group(1) if m else None
+                if not scanned_sku:
+                    m = re.search(r"skuId=?(\d{6,8})", u);                  scanned_sku  = m.group(1) if m else None
+            if scanned_asin and scanned_sku:
+                break
+
+        for entry in owners:
+            stored_asin = (entry.retailer_product_ids or {}).get("amazon")
+            stored_sku  = (entry.retailer_product_ids or {}).get("bestbuy")
+            asin = scanned_asin or stored_asin
+            sku  = scanned_sku  or stored_sku
+
+            for account_id in entry.auto_atc_account_ids:
+                acc = account_manager.find(account_id)
+                if not acc or not acc.enabled:
+                    continue
+                mod = _RETAILER_MODULES.get(acc.retailer)
+                if not mod:
+                    continue
+                # Only fire accounts whose retailer matches the deal's source.
+                # Prevents Best Buy alerts from triggering Amazon account fires
+                # (and vice versa) just because the watchlist entry has both
+                # ASIN and SKU stored.
+                if deal_retailer_key and acc.retailer != deal_retailer_key:
+                    await app_state.log("info",
+                        f"[{acc.name}] auto-ATC skipped: deal is from {deal_retailer_key}, "
+                        f"account is {acc.retailer}", "accounts")
+                    continue
+                if acc.status != STATUS_OK:
+                    await app_state.log("warn",
+                        f"[{acc.name}] auto-ATC skipped: account not logged in (status={acc.status})", "accounts")
+                    continue
+
+                # Pick the right identifier for this retailer
+                if acc.retailer == "amazon":
+                    pid = asin
+                    if not pid: continue
+                    url = amazon_retailer.url_from_asin(pid)
+                elif acc.retailer == "bestbuy":
+                    pid = sku
+                    if not pid: continue
+                    url = bestbuy_retailer.url_from_sku(pid)
+                else:
+                    continue
+
+                allowed, why = _atc_can_fire(account_id, pid)
+                if not allowed:
+                    await app_state.log("info",
+                        f"[{acc.name}] auto-ATC skipped for {pid}: {why}", "accounts")
+                    continue
+
+                # Record the fire BEFORE running ATC so concurrent sightings within
+                # the cooldown window see this attempt and skip. Otherwise rapid
+                # sightings (multiple Discord channels reporting the same deal)
+                # race the cooldown and all fire simultaneously.
+                _atc_record_fire(account_id, pid, success=False)  # provisional
+                await app_state.log("info",
+                    f"[{acc.name}] auto-ATC firing for '{entry.name}' ({acc.retailer} {pid})", "accounts")
+                try:
+                    result = await mod.add_to_cart(
+                        acc, url, user_agent, browser_chan, headless=True, quantity=1)
+                except Exception as e:
+                    result = {"success": False, "message": f"crashed: {e}"}
+                # Update the record with the actual success state
+                if result.get("success"):
+                    _atc_record_fire(account_id, pid, success=True)
+
+                # On successful Amazon ATC: immediately open a visible browser
+                # at the order-review page so the user can verify the cart total,
+                # address, and payment method, then click Place Your Order.
+                # Best Buy doesn't have a stable review-page URL flow yet.
+                if result.get("success") and acc.retailer == "amazon":
+                    asyncio.create_task(_review_after_auto_atc(acc, pid, entry.name))
+                await app_state.log(
+                    "info" if result.get("success") else "warn",
+                    f"[{acc.name}] auto-ATC: {result.get('message', '?')}", "accounts")
+                try:
+                    await price_db.record_order(
+                        account_id=acc.id, account_name=acc.name, retailer=acc.retailer,
+                        identifier=pid, product_label=entry.name,
+                        action="atc", success=bool(result.get("success")),
+                        message=result.get("message"), source="auto",
+                    )
+                except Exception as ee:
+                    log.debug(f"order log failed: {ee}")
+    except Exception as e:
+        await app_state.log("warn", f"auto-ATC handler error: {e}", "accounts")
+
+
+def _resolve_atc_url(body: dict, retailer: str = "amazon") -> str:
+    """Accept {url}, {asin}, {sku}, or {retailer_product_ids} from the body."""
+    u = (body.get("url") or "").strip()
+    if u:
+        return u
+    asin = (body.get("asin") or "").strip()
+    if asin:
+        return amazon_retailer.url_from_asin(asin)
+    sku = (body.get("sku") or "").strip()
+    if sku:
+        return bestbuy_retailer.url_from_sku(sku)
+    rids = body.get("retailer_product_ids") or {}
+    if retailer == "amazon" and rids.get("amazon"):
+        return amazon_retailer.url_from_asin(rids["amazon"])
+    if retailer == "bestbuy" and rids.get("bestbuy"):
+        return bestbuy_retailer.url_from_sku(rids["bestbuy"])
+    # Any retailer ID falls through
+    if rids.get("amazon"):  return amazon_retailer.url_from_asin(rids["amazon"])
+    if rids.get("bestbuy"): return bestbuy_retailer.url_from_sku(rids["bestbuy"])
+    return ""
+
+
+@app.post("/api/accounts/{account_id}/atc")
+async def account_atc(account_id: str, body: dict):
+    """Add a product to this account's cart. Body: {url}, {asin}, or {sku}; optional {quantity}."""
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    url = _resolve_atc_url(body, retailer=acc.retailer)
+    if not url:
+        raise HTTPException(status_code=400, detail="url, asin, or sku required")
+    quantity = max(1, int(body.get("quantity", 1)))
+
+    cfg     = load_config()
+    stealth = cfg.get("stealth", {}) or {}
+    from monitors.defaults import get_user_agent, get_browser_channel
+    user_agent   = get_user_agent(stealth)
+    browser_chan = get_browser_channel(stealth)
+    headless     = bool(body.get("headless", True))
+
+    mod = _RETAILER_MODULES.get(acc.retailer)
+    if not mod:
+        raise HTTPException(status_code=400, detail=f"Retailer '{acc.retailer}' not yet implemented")
+
+    await app_state.log("info", f"[{acc.name}] ATC starting → {url[:80]}", "accounts")
+    result = await mod.add_to_cart(acc, url, user_agent, browser_chan,
+                                   headless=headless, quantity=quantity)
+    log_level = "info" if result["success"] else "warn"
+    await app_state.log(log_level,
+        f"[{acc.name}] ATC: {result['message']}", "accounts")
+    try:
+        await price_db.record_order(
+            account_id=acc.id, account_name=acc.name, retailer=acc.retailer,
+            identifier=(body.get("asin") or body.get("sku") or url),
+            product_label=body.get("label"),
+            action="atc", success=bool(result.get("success")),
+            message=result.get("message"), source="manual",
+        )
+    except Exception as e:
+        log.debug(f"order log failed: {e}")
+    return result
+
+
+@app.post("/api/accounts/atc-batch")
+async def account_atc_batch(body: dict):
+    """Run ATC across multiple accounts in parallel. Body: {account_ids: [...], url|asin, quantity}."""
+    ids = body.get("account_ids") or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="account_ids required")
+    quantity = max(1, int(body.get("quantity", 1)))
+    headless = bool(body.get("headless", True))
+
+    cfg     = load_config()
+    stealth = cfg.get("stealth", {}) or {}
+    from monitors.defaults import get_user_agent, get_browser_channel
+    user_agent   = get_user_agent(stealth)
+    browser_chan = get_browser_channel(stealth)
+
+    async def _run_one(account_id: str) -> dict:
+        acc = account_manager.find(account_id)
+        if not acc:
+            return {"account_id": account_id, "name": "?", "success": False, "message": "Account not found"}
+        mod = _RETAILER_MODULES.get(acc.retailer)
+        if not mod:
+            return {"account_id": account_id, "name": acc.name, "success": False,
+                    "message": f"Retailer '{acc.retailer}' not yet implemented"}
+        # Resolve URL per-account so each retailer gets its appropriate identifier
+        url = _resolve_atc_url(body, retailer=acc.retailer)
+        if not url:
+            return {"account_id": account_id, "name": acc.name, "success": False,
+                    "message": "No url/asin/sku provided"}
+        await app_state.log("info", f"[{acc.name}] ATC starting → {url[:80]}", "accounts")
+        try:
+            r = await mod.add_to_cart(acc, url, user_agent, browser_chan,
+                                      headless=headless, quantity=quantity)
+        except Exception as e:
+            r = {"success": False, "message": f"Crashed: {e}", "cart_count": None}
+        await app_state.log("info" if r["success"] else "warn",
+            f"[{acc.name}] ATC: {r['message']}", "accounts")
+        try:
+            await price_db.record_order(
+                account_id=acc.id, account_name=acc.name, retailer=acc.retailer,
+                identifier=(body.get("asin") or body.get("sku") or url),
+                product_label=body.get("label"),
+                action="atc", success=bool(r.get("success")),
+                message=r.get("message"), source="manual",
+            )
+        except Exception as ee:
+            log.debug(f"order log failed: {ee}")
+        return {"account_id": account_id, "name": acc.name, **r}
+
+    results = await asyncio.gather(*[_run_one(i) for i in ids])
+    summary = {
+        "total":    len(results),
+        "succeeded": sum(1 for r in results if r.get("success")),
+        "results":  results,
+    }
+    return summary
+
+
+@app.get("/api/orders")
+async def list_orders(
+    limit: int = 100, offset: int = 0,
+    account_id: str | None = None,
+    retailer:   str | None = None,
+    action:     str | None = None,
+    success:    str | None = None,   # "true" | "false" | None
+    source:     str | None = None,
+    search:     str | None = None,
+):
+    """Paginated orders + audit trail with filters. success accepts 'true'/'false'."""
+    s_bool = None
+    if success is not None:
+        s_bool = str(success).lower() in ("true", "1", "yes")
+    return await price_db.query_orders(
+        limit=max(1, min(500, int(limit))), offset=max(0, int(offset)),
+        account_id=account_id or None,
+        retailer=retailer or None,
+        action=action or None,
+        success=s_bool,
+        source=source or None,
+        search=(search or "").strip() or None,
+    )
+
+
+@app.post("/api/accounts/{account_id}/clear-cart")
+async def account_clear_cart(account_id: str, body: dict | None = None):
+    """Empty the cart for this account. Useful before ATC to ensure clean state."""
+    body = body or {}
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if acc.retailer != "amazon":
+        raise HTTPException(status_code=400, detail="Clear cart only implemented for Amazon")
+    cfg     = load_config()
+    stealth = cfg.get("stealth", {}) or {}
+    from monitors.defaults import get_user_agent, get_browser_channel
+    user_agent   = get_user_agent(stealth)
+    browser_chan = get_browser_channel(stealth)
+    headless     = bool(body.get("headless", True))
+    result = await amazon_retailer.clear_cart(acc, user_agent, browser_chan, headless=headless)
+    await app_state.log("info" if result["success"] else "warn",
+        f"[{acc.name}] Clear cart: {result['message']}", "accounts")
+    return result
+
+
+@app.post("/api/accounts/{account_id}/checkout")
+async def account_checkout(account_id: str, body: dict | None = None):
+    """Run the cart → place-order flow on this account.
+    Body keys:
+      auto_confirm  bool   — actually click Place Your Order (default False; visible browser stays open for manual confirm)
+      max_total     float  — REQUIRED when auto_confirm is True; refuses to place orders above this
+      expected_asin str    — abort if cart doesn't contain this ASIN
+      headless      bool   — default True for auto_confirm, forced False otherwise
+    """
+    body = body or {}
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if acc.retailer != "amazon":
+        raise HTTPException(status_code=400, detail="Checkout only implemented for Amazon (Phase 3)")
+
+    cfg     = load_config()
+    stealth = cfg.get("stealth", {}) or {}
+    from monitors.defaults import get_user_agent, get_browser_channel
+    user_agent   = get_user_agent(stealth)
+    browser_chan = get_browser_channel(stealth)
+
+    auto_confirm  = bool(body.get("auto_confirm", False))
+    max_total     = body.get("max_total")
+    expected_asin = body.get("expected_asin")
+    headless      = bool(body.get("headless", True))
+
+    try:    max_total = float(max_total) if max_total is not None else None
+    except: max_total = None
+
+    await app_state.log("info",
+        f"[{acc.name}] Checkout starting (auto_confirm={auto_confirm}, max_total={max_total})", "accounts")
+    result = await amazon_retailer.checkout(
+        acc, user_agent, browser_chan,
+        headless=headless, auto_confirm=auto_confirm,
+        max_total=max_total, expected_asin=expected_asin,
+    )
+    log_level = "info" if result.get("success") else "warn"
+    await app_state.log(log_level,
+        f"[{acc.name}] Checkout: {result.get('message', '?')}", "accounts")
+    try:
+        await price_db.record_order(
+            account_id=acc.id, account_name=acc.name, retailer=acc.retailer,
+            identifier=expected_asin,
+            product_label=body.get("label"),
+            action="checkout", success=bool(result.get("success")),
+            order_id=result.get("order_id"),
+            total=result.get("total"),
+            message=result.get("message"),
+            source="manual",
+        )
+    except Exception as e:
+        log.debug(f"order log failed: {e}")
+    return result
+
+
+# Live browser sessions opened from the Accounts tab — keyed by account id.
+# Each value: {"pw":, "ctx":, "browser":(opt), "page":(opt)}.
+_open_account_browsers: dict[str, dict] = {}
+
+
+async def _close_open_account_browser(account_id: str) -> bool:
+    """Close any open browser for this account, broadcast state change."""
+    handle = _open_account_browsers.pop(account_id, None)
+    if not handle:
+        return False
+    try:
+        ctx = handle.get("ctx")
+        if ctx:
+            try: await ctx.close()
+            except Exception: pass
+    finally:
+        # launch (Amazon) returns a Browser object; persistent_context (Best Buy) doesn't
+        try:
+            br = handle.get("browser")
+            if br:
+                try: await br.close()
+                except Exception: pass
+        except Exception:
+            pass
+        try:
+            pw = handle.get("pw")
+            if pw:
+                try: await pw.stop()
+                except Exception: pass
+        except Exception:
+            pass
+    await app_state.ws.broadcast({
+        "type": "account_browser_state",
+        "data": {"account_id": account_id, "open": False},
+    })
+    return True
+
+
+@app.post("/api/accounts/{account_id}/toggle-browser")
+async def toggle_account_browser(account_id: str):
+    """Toggle a visible browser window for this account. First call opens a
+    real Chrome window pre-loaded with the saved profile/session. Second call
+    closes it. Same account, same profile every time."""
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if account_id in _open_account_browsers:
+        await _close_open_account_browser(account_id)
+        await app_state.log("info", f"[{acc.name}] browser closed", "accounts")
+        return {"open": False}
+
+    cfg     = load_config()
+    stealth = cfg.get("stealth", {}) or {}
+    from monitors.defaults import get_user_agent, get_browser_channel
+    user_agent   = get_user_agent(stealth)
+    browser_chan = get_browser_channel(stealth)
+
+    mod = _RETAILER_MODULES.get(acc.retailer)
+    if not mod or not hasattr(mod, "open_browser"):
+        raise HTTPException(status_code=400,
+            detail=f"Retailer '{acc.retailer}' doesn't support open_browser")
+
+    handle = await mod.open_browser(acc, user_agent, browser_chan)
+    if "error" in handle:
+        raise HTTPException(status_code=500, detail=handle["error"])
+
+    _open_account_browsers[account_id] = handle
+
+    # Detect when the user closes the window so we can clean up state.
+    ctx = handle.get("ctx")
+    if ctx:
+        async def _on_close():
+            await _close_open_account_browser(account_id)
+            await app_state.log("info", f"[{acc.name}] browser window closed by user", "accounts")
+        try:
+            ctx.on("close", lambda *_a: asyncio.create_task(_on_close()))
+        except Exception:
+            pass
+
+    await app_state.log("info", f"[{acc.name}] browser opened", "accounts")
+    await app_state.ws.broadcast({
+        "type": "account_browser_state",
+        "data": {"account_id": account_id, "open": True},
+    })
+    return {"open": True}
+
+
+@app.post("/api/accounts/{account_id}/check")
+async def check_account(account_id: str):
+    """Quick headless health check — verifies the saved session still works."""
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    cfg     = load_config()
+    stealth = cfg.get("stealth", {}) or {}
+    from monitors.defaults import get_user_agent, get_browser_channel
+    user_agent   = get_user_agent(stealth)
+    browser_chan = get_browser_channel(stealth)
+
+    mod = _RETAILER_MODULES.get(acc.retailer)
+    if mod:
+        result = await mod.health_check(acc, user_agent, browser_chan)
+    else:
+        result = STATUS_ERROR
+
+    acc.status = result
+    if result == STATUS_OK:
+        acc.last_error = None
+    elif result == STATUS_EXPIRED:
+        acc.last_error = "Session expired or not saved"
+    await app_state.ws.broadcast({"type": "account_update", "data": acc.to_dict()})
+    return acc.to_dict()
 
 
 @app.post("/api/products/{index}/resume")
@@ -2921,6 +3829,22 @@ async def confirm_hub_retailer_id(entry_id: str, body: dict):
             entry.confirmed_retailer_ids.append(key)
     else:
         entry.confirmed_retailer_ids = [k for k in entry.confirmed_retailer_ids if k != key]
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/auto-atc-accounts")
+async def set_hub_auto_atc_accounts(entry_id: str, body: dict):
+    """Set which accounts should auto-fire ATC when this watchlist item gets a new deal sighting."""
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    ids = body.get("account_ids") or []
+    if not isinstance(ids, list):
+        raise HTTPException(status_code=400, detail="account_ids must be a list")
+    valid_ids = {a.id for a in account_manager.accounts}
+    entry.auto_atc_account_ids = [str(i) for i in ids if str(i) in valid_ids]
     product_hub.save_to_disk()
     await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
     return entry.to_dict()

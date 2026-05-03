@@ -182,14 +182,22 @@ class DiscordGatewayMonitor:
 
         try:
             self._pw = await _playwright().start()
-            launch_kw = {"headless": False}  # Visible browser for manual login
+            # Headless only when a saved session exists AND user opted in.
+            # First-time login always needs a visible browser to enter credentials/2FA.
+            session_path = self._data_dir / _SESSION_FILE
+            user_wants_headless = bool((config or {}).get("discord", {}).get("headless", False))
+            run_headless = user_wants_headless and session_path.exists()
+            launch_kw = {"headless": run_headless}
+            if not run_headless and user_wants_headless:
+                print("  [Discord GW] Headless requested but no saved session — using visible window for login")
+            elif run_headless:
+                print("  [Discord GW] Running headless (saved session)")
             channel = get_browser_channel(stealth_cfg)
             if channel:
                 launch_kw["channel"] = channel
             self._browser = await self._pw.chromium.launch(**launch_kw)
 
             # Try restoring session
-            session_path = self._data_dir / _SESSION_FILE
             context_kw = {
                 "user_agent": get_user_agent(stealth_cfg),
                 "viewport": {"width": 1280, "height": 800},
@@ -213,6 +221,14 @@ class DiscordGatewayMonitor:
 
             # Check if we need to log in
             if "/login" in self._page.url or "/register" in self._page.url:
+                if run_headless:
+                    self._login_state = "error"
+                    self._error_message = (
+                        "Discord session expired but Hide Discord browser window is enabled. "
+                        "Uncheck it in Settings → Discord and restart to re-login."
+                    )
+                    print(f"  [Discord GW] {self._error_message}")
+                    return False
                 print("  [Discord GW] *** Please log into Discord in the browser window ***")
                 self._login_state = "awaiting_login"
 

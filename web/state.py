@@ -481,6 +481,7 @@ class ProductEntry:
     excluded_deal_ids: list[str] = field(default_factory=list)  # explicitly excluded from auto-match
     ignored_retailer_ids: dict = field(default_factory=dict)    # {retailer_key: [value, ...]} — never auto-fill these
     confirmed_retailer_ids: list[str] = field(default_factory=list)  # retailer keys the user has locked/confirmed
+    auto_atc_account_ids: list[str] = field(default_factory=list)  # account IDs to auto-fire ATC when this item gets a new deal sighting
 
     def to_dict(self) -> dict:
         d = {
@@ -495,6 +496,7 @@ class ProductEntry:
             "excluded_deal_ids": self.excluded_deal_ids,
             "ignored_retailer_ids": self.ignored_retailer_ids,
             "confirmed_retailer_ids": self.confirmed_retailer_ids,
+            "auto_atc_account_ids": self.auto_atc_account_ids,
         }
         return d
 
@@ -513,6 +515,7 @@ class ProductEntry:
             excluded_deal_ids=d.get("excluded_deal_ids", []),
             ignored_retailer_ids=d.get("ignored_retailer_ids", {}),
             confirmed_retailer_ids=d.get("confirmed_retailer_ids", []),
+            auto_atc_account_ids=d.get("auto_atc_account_ids", []),
         )
 
 
@@ -582,6 +585,7 @@ class AppState:
         self._monitor_task: Optional[asyncio.Task] = None
         self._reddit_task: Optional[asyncio.Task] = None
         self._discord_task: Optional[asyncio.Task] = None  # never cancelled by stop_monitor
+        self._bandwidth_task: Optional[asyncio.Task] = None  # bandwidth governor poll loop
         self.force_refresh_categories: set = set()  # {"single", "comic", "tcgplayer"}
 
     async def log(self, level: str, message: str, source: str = "system") -> None:
