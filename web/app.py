@@ -325,7 +325,7 @@ async def discord_gateway_loop():
                         "data": tracked.to_dict(),
                     })
 
-                    # DM notification — only for deals below market price
+                    # DM notification — send for all shown/tracked deals
                     dm_user = config.get("discord", {}).get("dm_user_id")
                     bot_token = config.get("discord", {}).get("bot_token", "")
                     dm_token = f"Bot {bot_token}" if bot_token else ""
@@ -335,7 +335,7 @@ async def discord_gateway_loop():
                         retailer_name = _extract_retailer(entry)
                         price = entry.get("price")
 
-                        # Find matching TCGPlayer product for deal scoring
+                        # Optionally find matching TCGPlayer product for price context
                         best_match = None
                         pct = None
                         if price:
@@ -352,31 +352,30 @@ async def discord_gateway_loop():
                             if best_match:
                                 pct = ((price - best_match.price) / best_match.price) * 100
 
-                        # Only DM if price is at least 15% below TCGPlayer market
-                        if best_match and pct is not None and pct <= -15:
-                            price_str = f"${price:.2f}"
-                            score_str = f" ({pct:+.0f}% vs TCG ${best_match.price:.2f})"
+                        price_str = f"${price:.2f}" if price else ""
+                        score_str = f" ({pct:+.0f}% vs TCG ${best_match.price:.2f})" if best_match and pct is not None else ""
 
-                            # Build URL — skip bot/tracking URLs
-                            url = ""
-                            for e in entry.get("embeds", []):
-                                u = e.get("url", "")
-                                if u and not any(skip in u for skip in [
-                                    "refractbot", "valoraio", "google.com/aclk",
-                                    "google.com/url", "gclid=",
-                                ]):
-                                    url = u
-                                    break
+                        # Build URL — skip bot/tracking URLs
+                        url = ""
+                        for e in entry.get("embeds", []):
+                            u = e.get("url", "")
+                            if u and not any(skip in u for skip in [
+                                "refractbot", "valoraio", "google.com/aclk",
+                                "google.com/url", "gclid=",
+                            ]):
+                                url = u
+                                break
 
-                            retailer_str = f"\n🏪 {retailer_name}" if retailer_name else ""
-                            dm_msg = f"🔔 **Deal Alert**\n**{title}**{retailer_str}\n**{price_str}**{score_str}"
-                            if url:
-                                dm_msg += f"\n🔗 {url}"
-                            from web.state import _extract_checkout_links
-                            cart_links = _extract_checkout_links(entry)
-                            for cl in cart_links[:3]:
-                                dm_msg += f"\n🛒 [{cl['label']}]({cl['url']})"
-                            await _discord.send_dm(dm_token, dm_user, dm_msg)
+                        retailer_str = f"\n🏪 {retailer_name}" if retailer_name else ""
+                        price_line = f"\n**{price_str}**{score_str}" if price_str else ""
+                        dm_msg = f"🔔 **Deal Alert**\n**{title}**{retailer_str}{price_line}"
+                        if url:
+                            dm_msg += f"\n🔗 {url}"
+                        from web.state import _extract_checkout_links
+                        cart_links = _extract_checkout_links(entry)
+                        for cl in cart_links[:3]:
+                            dm_msg += f"\n🛒 [{cl['label']}]({cl['url']})"
+                        await _discord.send_dm(dm_token, dm_user, dm_msg)
 
                 kw_str = ", ".join(result.get("matched_keywords", []))
                 price_str = f" — ${result['price']:.2f}" if result.get("price") else ""
@@ -427,6 +426,255 @@ async def discord_gateway_loop():
             await app_state.log("warn", f"Discord gateway error: {e}", "discord")
 
         await asyncio.sleep(3)
+
+
+# ------------------------------------------------------------------
+# Per-product check logic (used by both the scheduler loop and forced refreshes)
+# ------------------------------------------------------------------
+
+_force_check_sem = asyncio.Semaphore(4)
+
+
+async def _check_product(i: int, ps, sem: asyncio.Semaphore,
+                          next_check_at: dict,
+                          require_running: bool = True) -> None:
+    """Run a single product check. Shared by the monitor loop and forced refreshes."""
+    async with sem:
+        if require_running and not app_state.monitor_running:
+            return
+
+        await app_state.update_product(i, checking=True, error=None)
+        await app_state.log("info", f"Checking: {ps.name}", ps.site)
+
+        try:
+            cfg = load_config()
+            if i >= len(cfg.get("products", [])):
+                await app_state.update_product(i, checking=False, error="Config out of sync")
+                return
+            product_cfg = cfg["products"][i]
+            stealth_cfg = cfg.get("stealth", {})
+            global_iv   = cfg.get("check_interval_seconds", 1800)
+            jitter_pct  = stealth_cfg.get("jitter_pct", 20)
+
+            # eBay-only items (comics): skip product check, just run eBay search
+            if ps.site == "ebay":
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                try:
+                    ebay_result = await _ebay.check_single(product_cfg, stealth_cfg)
+                    if ebay_result.count > 0:
+                        # Save image from first listing if we don't have one
+                        if ebay_result.image_url and not ps.image_url:
+                            local = await cache_image(ebay_result.image_url)
+                            img_url = local or ebay_result.image_url
+                            await app_state.update_product(i, image_url=img_url)
+                            try:
+                                cfg2 = load_config()
+                                if i < len(cfg2["products"]):
+                                    cfg2["products"][i]["image_url"] = img_url
+                                    save_config(cfg2)
+                            except Exception:
+                                pass
+
+                        # Apply learned ignore patterns to new sales + live
+                        sales = ebay_result.sales
+                        live  = ebay_result.live
+                        await app_state.update_product(i,
+                            checking=False, last_checked=ts,
+                            ebay_sales=sales,
+                            ebay_live=live,
+                        )
+                        _apply_ignore_patterns(ps)
+                        _recompute_ebay_aggregates(ps)
+                        await app_state.update_product(i,
+                            ebay_median=ps.ebay_median,
+                            ebay_avg=ps.ebay_avg,
+                            ebay_low=ps.ebay_low,
+                            ebay_high=ps.ebay_high,
+                            ebay_sold_count=ps.ebay_sold_count,
+                            ebay_by_grade=ps.ebay_by_grade,
+                            ebay_sales=ps.ebay_sales,
+                        )
+                        await price_db.record_ebay_sold(
+                            product_name=ps.name, url=ps.url or ps.name,
+                            median_price=ps.ebay_median, avg_price=ps.ebay_avg,
+                            low_price=ps.ebay_low, high_price=ps.ebay_high,
+                            sold_count=ps.ebay_sold_count, checked_at=ts,
+                        )
+                        await price_db.record_ebay_transactions(
+                            product_name=ps.name, product_url=ps.url or ps.name,
+                            sales=ps.ebay_sales, checked_at=ts,
+                        )
+                        await app_state.log("info",
+                            f"{ps.name} — eBay median ${ps.ebay_median:.2f} ({ps.ebay_sold_count} sold)" if ps.ebay_median else f"{ps.name} — eBay {len(sales)} listings (all ignored)", "ebay")
+                    else:
+                        await app_state.update_product(i, checking=False, last_checked=ts,
+                                                       error=None)
+                        await app_state.log("info", f"{ps.name} — no sold data found", "130point")
+                except Exception as e:
+                    await app_state.update_product(i, checking=False, error=str(e))
+                    await app_state.log("error", f"{ps.name}: {e}", "ebay")
+
+                is_comic = ps.tags.get("category") == "comic"
+                _GRADED_IV_L = cfg.get("graded_interval_seconds", 7 * 86400)
+                effective_iv = ps.check_interval or (_GRADED_IV_L if is_comic else global_iv)
+                _schedule_next(next_check_at, i, effective_iv, jitter_pct)
+                app_state.save_to_disk()
+                return
+
+            monitors = {
+                "tcgplayer": _tcgplayer,
+                "manapool":  _manapool,
+            }
+            mon = monitors.get(ps.site)
+            if not mon:
+                await app_state.log("warn", f"Unknown site: {ps.site}")
+                await app_state.update_product(i, checking=False)
+                _schedule_next(next_check_at, i, ps.check_interval or global_iv, jitter_pct)
+                return
+
+            result = await mon.check_product(product_cfg, stealth_cfg)
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            await price_db.record_check(
+                product_name=ps.name, url=ps.url, site=ps.site,
+                price=result.price, available=result.available,
+                blocked=result.blocked, checked_at=ts,
+            )
+
+            if ps.site in ("tcgplayer", "manapool") and (result.price is not None or result.low_price is not None):
+                lp = result.listing_prices or []
+
+                prev_lp = ps.listing_prices or []
+                new_count = len(lp)
+                prev_count = len(prev_lp)
+                dom_qty = result.tcg_quantity or 0
+
+                is_partial = False
+                if dom_qty > 10 and new_count < dom_qty * 0.85:
+                    is_partial = True
+                elif prev_count > 10 and new_count < prev_count * 0.80:
+                    is_partial = True
+
+                if is_partial and prev_count > new_count:
+                    await app_state.log("warn",
+                        f"{ps.name}: partial listing capture ({new_count} vs DOM {dom_qty}, prev {prev_count}) — keeping previous",
+                        "tcgplayer")
+                    lp = prev_lp
+                    result.listing_prices = prev_lp
+                    if ps.tcg_low_price is not None:
+                        result.low_price = ps.tcg_low_price
+
+                total_qty = sum(l.get("qty", 1) for l in lp if isinstance(l, dict)) if lp else result.tcg_quantity
+                listing_json = json.dumps(lp) if lp else None
+                await price_db.record_tcg_check(
+                    product_name=ps.name, url=ps.url,
+                    market_price=result.price, low_price=result.low_price,
+                    quantity=total_qty, listings=result.tcg_quantity,
+                    checked_at=ts, listing_prices_json=listing_json,
+                )
+
+            # eBay sold search for all TCGPlayer/ManaPool items (singles + sealed)
+            is_single = ps.tags.get("category") == "single"
+            is_comic  = ps.tags.get("category") == "comic"
+            if ps.site in ("tcgplayer", "manapool"):
+                try:
+                    ebay_result = await _ebay.check_single(cfg["products"][i], stealth_cfg)
+                    if ebay_result.count > 0:
+                        await app_state.update_product(i,
+                            ebay_sales=ebay_result.sales,
+                        )
+                        _apply_ignore_patterns(ps)
+                        _recompute_ebay_aggregates(ps)
+                        await app_state.update_product(i,
+                            ebay_median=ps.ebay_median,
+                            ebay_avg=ps.ebay_avg,
+                            ebay_low=ps.ebay_low,
+                            ebay_high=ps.ebay_high,
+                            ebay_sold_count=ps.ebay_sold_count,
+                            ebay_by_grade=ps.ebay_by_grade,
+                            ebay_sales=ps.ebay_sales,
+                        )
+                        await price_db.record_ebay_sold(
+                            product_name=ps.name, url=ps.url or ps.name,
+                            median_price=ps.ebay_median, avg_price=ps.ebay_avg,
+                            low_price=ps.ebay_low, high_price=ps.ebay_high,
+                            sold_count=ps.ebay_sold_count, checked_at=ts,
+                        )
+                        await price_db.record_ebay_transactions(
+                            product_name=ps.name, product_url=ps.url or ps.name,
+                            sales=ps.ebay_sales, checked_at=ts,
+                        )
+                        await app_state.log("info",
+                            f"{ps.name} — eBay median ${ps.ebay_median:.2f} ({ps.ebay_sold_count} sold)" if ps.ebay_median else f"{ps.name} — eBay {ebay_result.count} listings (all ignored)",
+                            "ebay")
+                except Exception as e:
+                    log.debug(f"eBay check error for {ps.name}: {e}")
+
+            # ManaPool side-check for TCGPlayer items that have a manapool_url tag
+            if ps.site == "tcgplayer" and ps.tags.get("manapool_url"):
+                try:
+                    await _manapool._refresh_cache_if_stale()
+                    mp_market, mp_low, mp_qty, _ = _manapool._lookup(
+                        ps.tags["manapool_url"], ps.tags
+                    )
+                    await app_state.update_product(i,
+                        mp_market_price=mp_market,
+                        mp_low_price=mp_low,
+                        mp_quantity=mp_qty,
+                    )
+                    await app_state.log("info",
+                        f"{ps.name} — ManaPool market=${mp_market}, low=${mp_low}, qty={mp_qty}",
+                        "manapool")
+                except Exception as e:
+                    await app_state.log("warn", f"ManaPool side-check error for {ps.name}: {e}", "manapool")
+
+            _SINGLES_IV  = 6 * 3600
+            _GRADED_IV_L = cfg.get("graded_interval_seconds", 7 * 86400)
+            effective_iv = ps.check_interval or (_GRADED_IV_L if is_comic else _SINGLES_IV if is_single else global_iv)
+            next_secs    = _schedule_next(next_check_at, i, effective_iv, jitter_pct)
+
+            update_kwargs = dict(
+                price=result.price, available=result.available,
+                last_checked=ts, checking=False,
+                error=result.error,
+                next_check_in=next_secs,
+            )
+            if result.image_url:
+                local = await cache_image(result.image_url)
+                img_url = local or result.image_url
+                update_kwargs["image_url"] = img_url
+                if i < len(cfg["products"]) and not cfg["products"][i].get("image_url"):
+                    cfg["products"][i]["image_url"] = img_url
+                    save_config(cfg)
+            if result.low_price is not None:
+                update_kwargs["tcg_low_price"] = result.low_price
+            if result.tcg_quantity is not None:
+                update_kwargs["tcg_quantity"] = result.tcg_quantity
+            if result.listing_prices:
+                update_kwargs["listing_prices"] = result.listing_prices
+                update_kwargs["tcg_market_low"] = _compute_market_low(
+                    result.listing_prices, result.low_price
+                )
+            if result.tcg_sales:
+                update_kwargs["tcg_sales"] = result.tcg_sales
+            if result.tcg_price_history:
+                update_kwargs["tcg_price_history"] = result.tcg_price_history
+            await app_state.update_product(i, **update_kwargs)
+            app_state.save_to_disk()
+
+            if result.price:
+                low_str = f" · low ${result.low_price:.2f}" if result.low_price else ""
+                qty_str = f" · {result.tcg_quantity} listings" if result.tcg_quantity else ""
+                await app_state.log("info", f"{ps.name} — market ${result.price:.2f}{low_str}{qty_str}", ps.site)
+            elif result.error:
+                await app_state.log("warn", f"{ps.name} — {result.error}", ps.site)
+            else:
+                await app_state.log("warn", f"{ps.name} — could not read price", ps.site)
+
+        except Exception as e:
+            await app_state.update_product(i, checking=False, error=str(e))
+            await app_state.log("error", f"{ps.name}: {e}", ps.site)
+            _schedule_next(next_check_at, i, ps.check_interval or global_iv, jitter_pct)
 
 
 # ------------------------------------------------------------------
@@ -513,245 +761,7 @@ async def monitor_loop():
         _check_sem = asyncio.Semaphore(4)  # max 4 concurrent checks
 
         async def _check_one(i: int, ps):
-            async with _check_sem:
-                if not app_state.monitor_running:
-                    return
-
-                await app_state.update_product(i, checking=True, error=None)
-                await app_state.log("info", f"Checking: {ps.name}", ps.site)
-
-                try:
-                    cfg = load_config()
-                    if i >= len(cfg.get("products", [])):
-                        await app_state.update_product(i, checking=False, error="Config out of sync")
-                        return
-                    product_cfg = cfg["products"][i]
-
-                    # eBay-only items (comics): skip product check, just run eBay search
-                    if ps.site == "ebay":
-                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        try:
-                            ebay_result = await _ebay.check_single(product_cfg, stealth_cfg)
-                            if ebay_result.count > 0:
-                                # Save image from first listing if we don't have one
-                                if ebay_result.image_url and not ps.image_url:
-                                    local = await cache_image(ebay_result.image_url)
-                                    img_url = local or ebay_result.image_url
-                                    await app_state.update_product(i, image_url=img_url)
-                                    try:
-                                        cfg2 = load_config()
-                                        if i < len(cfg2["products"]):
-                                            cfg2["products"][i]["image_url"] = img_url
-                                            save_config(cfg2)
-                                    except Exception:
-                                        pass
-
-                                # Apply learned ignore patterns to new sales + live
-                                sales = ebay_result.sales
-                                live  = ebay_result.live
-                                await app_state.update_product(i,
-                                    checking=False, last_checked=ts,
-                                    ebay_sales=sales,
-                                    ebay_live=live,
-                                )
-                                _apply_ignore_patterns(ps)
-                                _recompute_ebay_aggregates(ps)
-                                await app_state.update_product(i,
-                                    ebay_median=ps.ebay_median,
-                                    ebay_avg=ps.ebay_avg,
-                                    ebay_low=ps.ebay_low,
-                                    ebay_high=ps.ebay_high,
-                                    ebay_sold_count=ps.ebay_sold_count,
-                                    ebay_by_grade=ps.ebay_by_grade,
-                                    ebay_sales=ps.ebay_sales,
-                                )
-                                await price_db.record_ebay_sold(
-                                    product_name=ps.name, url=ps.url or ps.name,
-                                    median_price=ps.ebay_median, avg_price=ps.ebay_avg,
-                                    low_price=ps.ebay_low, high_price=ps.ebay_high,
-                                    sold_count=ps.ebay_sold_count, checked_at=ts,
-                                )
-                                await price_db.record_ebay_transactions(
-                                    product_name=ps.name, product_url=ps.url or ps.name,
-                                    sales=ps.ebay_sales, checked_at=ts,
-                                )
-                                await app_state.log("info",
-                                    f"{ps.name} — eBay median ${ps.ebay_median:.2f} ({ps.ebay_sold_count} sold)" if ps.ebay_median else f"{ps.name} — eBay {len(sales)} listings (all ignored)", "ebay")
-                            else:
-                                await app_state.update_product(i, checking=False, last_checked=ts,
-                                                               error=None)
-                                await app_state.log("info", f"{ps.name} — no sold data found", "130point")
-                        except Exception as e:
-                            await app_state.update_product(i, checking=False, error=str(e))
-                            await app_state.log("error", f"{ps.name}: {e}", "ebay")
-
-                        is_comic = ps.tags.get("category") == "comic"
-                        _GRADED_IV_L = config.get("graded_interval_seconds", 7 * 86400)
-                        effective_iv = ps.check_interval or (_GRADED_IV_L if is_comic else global_iv)
-                        _schedule_next(next_check_at, i, effective_iv, jitter_pct)
-                        app_state.save_to_disk()
-                        return
-
-                    monitors = {
-                        "tcgplayer": _tcgplayer,
-                        "manapool":  _manapool,
-                    }
-                    mon = monitors.get(ps.site)
-                    if not mon:
-                        await app_state.log("warn", f"Unknown site: {ps.site}")
-                        await app_state.update_product(i, checking=False)
-                        _schedule_next(next_check_at, i, ps.check_interval or global_iv, jitter_pct)
-                        return
-
-                    result = await mon.check_product(product_cfg, stealth_cfg)
-                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                    await price_db.record_check(
-                        product_name=ps.name, url=ps.url, site=ps.site,
-                        price=result.price, available=result.available,
-                        blocked=result.blocked, checked_at=ts,
-                    )
-
-                    if ps.site in ("tcgplayer", "manapool") and (result.price is not None or result.low_price is not None):
-                        # listings = number of sellers, quantity = total copies available
-                        # listing_prices has per-listing qty data; tcg_quantity is listing count from DOM
-                        lp = result.listing_prices or []
-
-                        # Pagination sanity check: detect partial captures where the
-                        # browser only got some pages of listings. Compare against
-                        # DOM-reported quantity AND previous listing count.
-                        prev_lp = ps.listing_prices or []
-                        new_count = len(lp)
-                        prev_count = len(prev_lp)
-                        dom_qty = result.tcg_quantity or 0  # "N Listings" from DOM header
-
-                        is_partial = False
-                        if dom_qty > 10 and new_count < dom_qty * 0.85:
-                            is_partial = True  # got less than 85% of DOM-reported listings
-                        elif prev_count > 10 and new_count < prev_count * 0.80:
-                            is_partial = True  # dropped more than 20% from previous
-
-                        if is_partial and prev_count > new_count:
-                            await app_state.log("warn",
-                                f"{ps.name}: partial listing capture ({new_count} vs DOM {dom_qty}, prev {prev_count}) — keeping previous",
-                                "tcgplayer")
-                            lp = prev_lp
-                            result.listing_prices = prev_lp
-                            if ps.tcg_low_price is not None:
-                                result.low_price = ps.tcg_low_price
-
-                        total_qty = sum(l.get("qty", 1) for l in lp if isinstance(l, dict)) if lp else result.tcg_quantity
-                        listing_json = json.dumps(lp) if lp else None
-                        await price_db.record_tcg_check(
-                            product_name=ps.name, url=ps.url,
-                            market_price=result.price, low_price=result.low_price,
-                            quantity=total_qty, listings=result.tcg_quantity,
-                            checked_at=ts, listing_prices_json=listing_json,
-                        )
-
-                    # eBay sold search for all TCGPlayer/ManaPool items (singles + sealed)
-                    is_single = ps.tags.get("category") == "single"
-                    is_comic  = ps.tags.get("category") == "comic"
-                    if ps.site in ("tcgplayer", "manapool"):
-                        try:
-                            ebay_result = await _ebay.check_single(cfg["products"][i], stealth_cfg)
-                            if ebay_result.count > 0:
-                                await app_state.update_product(i,
-                                    ebay_sales=ebay_result.sales,
-                                )
-                                # Re-apply ignore patterns to fresh sales
-                                _apply_ignore_patterns(ps)
-                                _recompute_ebay_aggregates(ps)
-                                await app_state.update_product(i,
-                                    ebay_median=ps.ebay_median,
-                                    ebay_avg=ps.ebay_avg,
-                                    ebay_low=ps.ebay_low,
-                                    ebay_high=ps.ebay_high,
-                                    ebay_sold_count=ps.ebay_sold_count,
-                                    ebay_by_grade=ps.ebay_by_grade,
-                                    ebay_sales=ps.ebay_sales,
-                                )
-                                await price_db.record_ebay_sold(
-                                    product_name=ps.name, url=ps.url or ps.name,
-                                    median_price=ps.ebay_median, avg_price=ps.ebay_avg,
-                                    low_price=ps.ebay_low, high_price=ps.ebay_high,
-                                    sold_count=ps.ebay_sold_count, checked_at=ts,
-                                )
-                                await price_db.record_ebay_transactions(
-                                    product_name=ps.name, product_url=ps.url or ps.name,
-                                    sales=ps.ebay_sales, checked_at=ts,
-                                )
-                                await app_state.log("info",
-                                    f"{ps.name} — eBay median ${ps.ebay_median:.2f} ({ps.ebay_sold_count} sold)" if ps.ebay_median else f"{ps.name} — eBay {ebay_result.count} listings (all ignored)",
-                                    "ebay")
-                        except Exception as e:
-                            log.debug(f"eBay check error for {ps.name}: {e}")
-
-                    # ManaPool side-check for TCGPlayer items that have a manapool_url tag
-                    if ps.site == "tcgplayer" and ps.tags.get("manapool_url"):
-                        try:
-                            await _manapool._refresh_cache_if_stale()
-                            mp_market, mp_low, mp_qty, _ = _manapool._lookup(
-                                ps.tags["manapool_url"], ps.tags
-                            )
-                            await app_state.update_product(i,
-                                mp_market_price=mp_market,
-                                mp_low_price=mp_low,
-                                mp_quantity=mp_qty,
-                            )
-                            await app_state.log("info",
-                                f"{ps.name} — ManaPool market=${mp_market}, low=${mp_low}, qty={mp_qty}",
-                                "manapool")
-                        except Exception as e:
-                            await app_state.log("warn", f"ManaPool side-check error for {ps.name}: {e}", "manapool")
-
-                    _SINGLES_IV  = 6 * 3600
-                    _GRADED_IV_L = config.get("graded_interval_seconds", 7 * 86400)
-                    effective_iv = ps.check_interval or (_GRADED_IV_L if is_comic else _SINGLES_IV if is_single else global_iv)
-                    next_secs    = _schedule_next(next_check_at, i, effective_iv, jitter_pct)
-
-                    update_kwargs = dict(
-                        price=result.price, available=result.available,
-                        last_checked=ts, checking=False,
-                        error=result.error,
-                        next_check_in=next_secs,
-                    )
-                    if result.image_url:
-                        # Download and cache locally
-                        local = await cache_image(result.image_url)
-                        img_url = local or result.image_url
-                        update_kwargs["image_url"] = img_url
-                        if i < len(cfg["products"]) and not cfg["products"][i].get("image_url"):
-                            cfg["products"][i]["image_url"] = img_url
-                            save_config(cfg)
-                    if result.low_price is not None:
-                        update_kwargs["tcg_low_price"] = result.low_price
-                    if result.tcg_quantity is not None:
-                        update_kwargs["tcg_quantity"] = result.tcg_quantity
-                    if result.listing_prices:
-                        update_kwargs["listing_prices"] = result.listing_prices
-                        # Compute 5th percentile market low to exclude outliers
-                        update_kwargs["tcg_market_low"] = _compute_market_low(
-                            result.listing_prices, result.low_price
-                        )
-                    if result.tcg_sales:
-                        update_kwargs["tcg_sales"] = result.tcg_sales
-                    if result.tcg_price_history:
-                        update_kwargs["tcg_price_history"] = result.tcg_price_history
-                    await app_state.update_product(i, **update_kwargs)
-                    app_state.save_to_disk()
-
-                    if result.price:
-                        low_str = f" · low ${result.low_price:.2f}" if result.low_price else ""
-                        qty_str = f" · {result.tcg_quantity} listings" if result.tcg_quantity else ""
-                        await app_state.log("info", f"{ps.name} — market ${result.price:.2f}{low_str}{qty_str}", ps.site)
-                    else:
-                        await app_state.log("warn", f"{ps.name} — could not read price", ps.site)
-
-                except Exception as e:
-                    await app_state.update_product(i, checking=False, error=str(e))
-                    await app_state.log("error", f"{ps.name}: {e}", ps.site)
-                    _schedule_next(next_check_at, i, ps.check_interval or global_iv, jitter_pct)
+            await _check_product(i, ps, _check_sem, next_check_at, require_running=True)
 
         # Gather all due checks and run them concurrently
         due = [
@@ -794,6 +804,18 @@ def _schedule_next(next_check_at: dict, index: int, interval: int, jitter_pct: i
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Suppress harmless Windows ProactorEventLoop connection-reset noise
+    _loop = asyncio.get_running_loop()
+    def _quiet_exc_handler(loop, context):
+        exc = context.get("exception")
+        msg = context.get("message", "")
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
+            return
+        if "Task was destroyed but it is pending" in msg:
+            return
+        loop.default_exception_handler(context)
+    _loop.set_exception_handler(_quiet_exc_handler)
+
     config = load_config()
     # Configure data directory if specified
     data_dir = config.get("data_dir")
@@ -866,12 +888,16 @@ async def lifespan(app: FastAPI):
                          if ps.image_url and ps.image_url.startswith("http")]
         total_images = len(remote_images)
         if total_images:
-            for i, ps in enumerate(remote_images):
-                pct = 55 + int((i / total_images) * 40)
-                await _progress(f"Caching images… ({i + 1}/{total_images})", pct)
-                local = await cache_image(ps.image_url)
-                if local:
-                    ps.image_url = local
+            await _progress(f"Caching {total_images} product images…", 60)
+            img_sem = asyncio.Semaphore(8)
+
+            async def _cache_one(ps):
+                async with img_sem:
+                    local = await cache_image(ps.image_url)
+                    if local:
+                        ps.image_url = local
+
+            await asyncio.gather(*[_cache_one(ps) for ps in remote_images])
             await _progress(f"Cached {total_images} product images", 95, done=True)
 
         await app_state.ws.broadcast({"type": "startup_complete", "data": None})
@@ -1370,17 +1396,27 @@ def _detect_price_outliers(prices: list[float]) -> set[float]:
 
 
 def _recompute_ebay_aggregates(ps):
-    """Recalculate median/avg/low/high/by_grade from non-ignored, non-outlier sales."""
+    """Recalculate median/avg/low/high/by_grade from non-ignored, non-outlier sales.
+    Comics/graded items skip outlier detection — high-grade vs low-grade legitimately
+    span 100x price ranges and IQR pruning would discard real data."""
     import statistics
     if not ps.ebay_sales:
         return
     active = [s for s in ps.ebay_sales if not s.get("ignored")]
     prices = [s["price"] for s in active if s.get("price")]
 
-    # Detect and flag statistical outliers (e.g. fraudulent $4.99 sales)
-    outlier_prices = _detect_price_outliers(prices)
-    for s in active:
-        s["outlier"] = s.get("price") in outlier_prices
+    is_graded = ps.tags.get("category") == "comic"
+
+    if is_graded:
+        # No outlier filtering — every grade tier is legitimate data
+        outlier_prices: set = set()
+        for s in active:
+            s["outlier"] = False
+    else:
+        # Detect and flag statistical outliers (e.g. fraudulent $4.99 sales)
+        outlier_prices = _detect_price_outliers(prices)
+        for s in active:
+            s["outlier"] = s.get("price") in outlier_prices
 
     clean_prices = [p for p in prices if p not in outlier_prices]
     use_prices = clean_prices if clean_prices else prices  # fallback if everything is an outlier
@@ -1926,14 +1962,32 @@ async def clear_dismissed_deals():
 
 @app.post("/api/refresh/{category}")
 async def refresh_category(category: str):
-    """Force all items of a category (or site) to check on next cycle."""
+    """Force all items of a category (or site) to check immediately."""
     if category == "tcgplayer":
-        # Refresh all TCGPlayer/ManaPool items (singles + sealed)
-        count = sum(1 for ps in app_state.product_statuses if ps.site in ("tcgplayer", "manapool"))
+        indices = [i for i, ps in enumerate(app_state.product_statuses) if ps.site in ("tcgplayer", "manapool")]
     else:
-        count = sum(1 for ps in app_state.product_statuses if ps.tags.get("category") == category)
-    app_state.force_refresh_categories.add(category)
-    await app_state.log("info", f"Force refresh queued for {count} {category} items", "system")
+        indices = [i for i, ps in enumerate(app_state.product_statuses) if ps.tags.get("category") == category]
+    count = len(indices)
+
+    if app_state.monitor_running:
+        # Monitor loop is running — queue the refresh so it picks them up immediately
+        app_state.force_refresh_categories.add(category)
+        await app_state.log("info", f"Force refresh queued for {count} {category} items", "system")
+    else:
+        # Monitor is paused — run forced checks directly in background
+        await app_state.log("info", f"Running forced refresh for {count} {category} items (monitor paused)", "system")
+
+        async def _run_forced():
+            temp_schedule: dict = {}
+            tasks = [_check_product(i, app_state.product_statuses[i], _force_check_sem,
+                                    temp_schedule, require_running=False)
+                     for i in indices if i < len(app_state.product_statuses)
+                     and app_state.product_statuses[i].enabled]
+            await asyncio.gather(*tasks)
+            await app_state.log("info", f"Forced refresh complete ({count} items)", "system")
+
+        asyncio.create_task(_run_forced())
+
     return {"status": "ok", "count": count}
 
 @app.get("/api/settings")
@@ -1949,7 +2003,7 @@ async def get_settings():
         "user_agent":            stealth.get("user_agent") or "",
         "browser_channel":       stealth.get("browser_channel") or "",
         "proxy":                 stealth.get("proxy") or [],
-        "page_timeout_ms":       stealth.get("page_timeout_ms", 30000),
+        "page_timeout_ms":       stealth.get("page_timeout_ms", 60000),
         "network_timeout_seconds": stealth.get("network_timeout_seconds", 15),
         "schedule_enabled":      schedule.get("enabled", False),
         "schedule_start":        schedule.get("start", "07:00"),
@@ -1967,6 +2021,8 @@ async def get_settings():
         "research_interval_hours": research.get("interval_hours", 168),
         "research_lookback_days":  research.get("lookback_days", 7),
         "research_max_findings":   research.get("max_findings", 7),
+        "proxycheap_api_key":    config.get("proxycheap", {}).get("api_key") or "",
+        "proxycheap_api_secret": config.get("proxycheap", {}).get("api_secret") or "",
     }
 
 @app.put("/api/settings")
@@ -2032,9 +2088,96 @@ async def update_settings(body: dict):
         rc["lookback_days"] = max(1, min(90, int(body["research_lookback_days"])))
     if "research_max_findings" in body:
         rc["max_findings"] = max(1, min(20, int(body["research_max_findings"])))
+    pc = config.setdefault("proxycheap", {})
+    if "proxycheap_api_key" in body:
+        pc["api_key"] = body["proxycheap_api_key"].strip() or None
+    if "proxycheap_api_secret" in body:
+        pc["api_secret"] = body["proxycheap_api_secret"].strip() or None
     save_config(config)
     await app_state.log("info", "Settings saved", "system")
     return {"status": "ok"}
+
+@app.get("/api/proxycheap/bandwidth")
+async def get_proxycheap_bandwidth(debug: bool = False):
+    """Fetch proxy bandwidth usage from the proxy-cheap REST API.
+    Tries several candidate paths since the public docs don't enumerate them.
+    Pass ?debug=1 to see the raw responses from each tried path.
+    """
+    config = load_config()
+    pc = config.get("proxycheap", {})
+    api_key    = pc.get("api_key", "")
+    api_secret = pc.get("api_secret", "")
+    if not api_key or not api_secret:
+        raise HTTPException(status_code=400, detail="proxy-cheap API key/secret not configured")
+
+    import aiohttp as _aiohttp
+    import json as _json
+    url = "https://api.proxy-cheap.com/proxies"
+    headers = {"X-Api-Key": api_key, "X-Api-Secret": api_secret, "Accept": "application/json"}
+
+    attempts = []
+    data = None
+
+    async with _aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers,
+                                   timeout=_aiohttp.ClientTimeout(total=10)) as resp:
+                ct = resp.headers.get("content-type", "")
+                body = await resp.text()
+                attempts.append({
+                    "url": url, "status": resp.status, "content_type": ct,
+                    "body_snippet": body[:500],
+                })
+                if resp.status == 200:
+                    # proxy-cheap mislabels JSON responses as text/html — try to parse anyway
+                    try:
+                        data = _json.loads(body)
+                    except Exception as e:
+                        attempts[-1]["parse_error"] = str(e)
+        except Exception as e:
+            attempts.append({"url": url, "error": str(e)})
+
+    if data is None:
+        if debug:
+            return {"proxies": [], "error": "Failed to fetch", "attempts": attempts}
+        raise HTTPException(status_code=502,
+            detail="proxy-cheap API call failed. Add ?debug=1 to inspect the response.")
+
+    # Normalise: API may return a list or {data: [...]} or {proxies: [...]}
+    proxies_list = data if isinstance(data, list) else data.get("data", data.get("proxies", []))
+    results = []
+    for p in (proxies_list if isinstance(proxies_list, list) else []):
+        if not isinstance(p, dict):
+            continue
+        bw = p.get("bandwidth") or {}
+        try: total = float(bw.get("total") or 0)
+        except: total = 0.0
+        try: used = float(bw.get("used") or 0)
+        except: used = 0.0
+        remaining = max(0.0, total - used) if total else None
+
+        net = p.get("networkType") or ""
+        ptype = p.get("proxyType") or ""
+        label_parts = [s for s in (net, ptype) if s]
+        label = " ".join(label_parts) or str(p.get("id", ""))
+
+        results.append({
+            "id":        p.get("id"),
+            "label":     label,
+            "status":    p.get("status", ""),
+            "expires_at": p.get("expiresAt"),
+            "total_gb":  total or None,
+            "used_gb":   used,
+            "remaining_gb": remaining,
+            "pct_used":  round(used / total * 100, 1) if total else None,
+        })
+
+    out = {"proxies": results}
+    if debug:
+        out["raw"] = data
+        out["attempts"] = attempts
+    return out
+
 
 @app.post("/api/products/{index}/resume")
 async def resume_product(index: int):
@@ -2600,6 +2743,81 @@ async def assign_hub_deal(entry_id: str, body: dict):
     return entry.to_dict()
 
 
+@app.post("/api/product-hub/{entry_id}/promote-discord-message")
+async def promote_discord_message(entry_id: str, body: dict):
+    """Take a (filtered or shown) discord_log row by msg_id, ingest it as a tracked
+    deal, and assign that deal to the given watchlist entry."""
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    msg_id = (body.get("msg_id") or "").strip()
+    if not msg_id:
+        raise HTTPException(status_code=400, detail="msg_id required")
+
+    # Fetch the discord_log row directly
+    async with aiosqlite.connect(price_db.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM discord_log WHERE msg_id = ? ORDER BY logged_at DESC LIMIT 1",
+            (msg_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Discord message not found in log")
+
+    row = dict(row)
+
+    # Reconstruct the message dict in the shape deal_tracker.ingest() expects.
+    # discord_log stores embed_title/embed_fields as separate text columns;
+    # the gateway feeds ingest() a list of {title, description, fields, url, image}.
+    fields_text = row.get("embed_fields") or ""
+    # Parse "Field Name: value\n..." into [{name,value}] (best-effort, single embed)
+    parsed_fields = []
+    for line in fields_text.split("\n"):
+        if ":" in line:
+            n, _, v = line.partition(":")
+            n, v = n.strip(), v.strip()
+            if n and v:
+                parsed_fields.append({"name": n, "value": v})
+    # Pull URL from the fields' first markdown link, if any
+    url = ""
+    m = re.search(r"\[[^\]]*\]\(([^)]+)\)", fields_text)
+    if m:
+        url = m.group(1)
+
+    msg = {
+        "id":        msg_id,
+        "content":   row.get("content") or "",
+        "author":    row.get("author") or "",
+        "price":     row.get("price"),
+        "timestamp": row.get("timestamp") or row.get("logged_at") or "",
+        "embeds": [{
+            "title":       row.get("embed_title") or "",
+            "description": "",
+            "fields":      parsed_fields,
+            "url":         url,
+            "image":       "",
+            "thumbnail":   "",
+        }],
+    }
+
+    tracked = deal_tracker.ingest(msg)
+    if not tracked:
+        raise HTTPException(status_code=400, detail="Could not extract a product name from this message")
+
+    if tracked.id not in entry.deal_ids:
+        entry.deal_ids.append(tracked.id)
+    # Also ensure it isn't on the excluded list
+    entry.excluded_deal_ids = [d for d in entry.excluded_deal_ids if d != tracked.id]
+
+    deal_tracker.save_to_disk()
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "tracked_deal_update", "data": tracked.to_dict()})
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    await app_state.log("info", f"Assigned Discord message to '{entry.name}' (deal {tracked.id})", "system")
+    return {"deal_id": tracked.id, "entry": entry.to_dict()}
+
+
 @app.post("/api/product-hub/{entry_id}/unassign-deal")
 async def unassign_hub_deal(entry_id: str, body: dict):
     entry = product_hub.find_by_id(entry_id)
@@ -2666,13 +2884,36 @@ async def save_hub_product_ids(entry_id: str, body: dict):
     entry = product_hub.find_by_id(entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
-    # Merge incoming IDs; null/empty values clear the key
+    # Merge incoming IDs; null/empty values clear the key and any confirmation for it
     incoming = body.get("ids", {})
     for key, val in incoming.items():
         if val:
-            entry.retailer_product_ids[key] = str(val).strip()
+            new_val = str(val).strip()
+            # If the ID changed, drop the confirmation (it's no longer verified)
+            if entry.retailer_product_ids.get(key) != new_val:
+                entry.confirmed_retailer_ids = [k for k in entry.confirmed_retailer_ids if k != key]
+            entry.retailer_product_ids[key] = new_val
         else:
             entry.retailer_product_ids.pop(key, None)
+            entry.confirmed_retailer_ids = [k for k in entry.confirmed_retailer_ids if k != key]
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/confirm-retailer-id")
+async def confirm_hub_retailer_id(entry_id: str, body: dict):
+    """Lock/unlock a retailer product ID. Locked IDs are exclusively owned and won't auto-fill elsewhere."""
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    key = body.get("key", "")
+    confirmed = body.get("confirmed", True)
+    if confirmed:
+        if key not in entry.confirmed_retailer_ids:
+            entry.confirmed_retailer_ids.append(key)
+    else:
+        entry.confirmed_retailer_ids = [k for k in entry.confirmed_retailer_ids if k != key]
     product_hub.save_to_disk()
     await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
     return entry.to_dict()

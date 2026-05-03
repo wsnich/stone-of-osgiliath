@@ -1963,7 +1963,28 @@ select.form-input option { background: var(--surface2); }
           <div>
             <label class="form-label">Proxies</label>
             <textarea class="form-input" id="set-proxy" rows="4" placeholder="One proxy per line, e.g.:&#10;socks5://host:1080&#10;http://user:pass@host2:3128" style="font-size:11px;font-family:monospace;resize:vertical"></textarea>
-            <div style="font-size:10px;color:var(--muted);margin-top:2px">One proxy per line. Each product check picks a random proxy. Failed proxies are skipped until all have been tried.</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px">One proxy per line. Each product check picks a random proxy. Failed proxies are skipped for 5 minutes after a failure.</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div>
+              <label class="form-label">proxy-cheap API Key <span style="color:var(--muted);font-weight:400;font-size:10px">(optional — for bandwidth display)</span></label>
+              <input type="password" class="form-input" id="set-proxycheap-key" placeholder="API Key" autocomplete="off">
+            </div>
+            <div>
+              <label class="form-label">proxy-cheap API Secret</label>
+              <input type="password" class="form-input" id="set-proxycheap-secret" placeholder="API Secret" autocomplete="off">
+            </div>
+          </div>
+          <div id="proxycheap-bw-widget" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:6px">
+              <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Proxy Bandwidth</span>
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="loadProxyCheapBandwidth()">↻ Refresh</button>
+                <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="debugProxyCheapBandwidth()">Debug</button>
+              </div>
+            </div>
+            <div id="proxycheap-bw-rows"></div>
+            <pre id="proxycheap-bw-debug" style="display:none;font-size:10px;background:var(--surface3);padding:8px;border-radius:4px;margin-top:8px;max-height:400px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
             <div>
@@ -2154,7 +2175,7 @@ select.form-input option { background: var(--surface2); }
         <button class="tab-btn" id="tab-intelligence" onclick="switchTab('intelligence')">Intelligence</button>
         <button class="tab-btn" id="tab-research" onclick="switchTab('research')">Research</button>
       </div>
-      <button class="btn btn-primary btn-sm" id="add-btn" onclick="handleAddBtn()" style="display:none">+ Add Product</button>
+      <button class="btn btn-primary btn-sm" id="add-btn" onclick="handleAddBtn()">+ Add to Watchlist</button>
     </div>
 
     <!-- ── Products/Watchlist tab ───────────────────────────── -->
@@ -2916,13 +2937,15 @@ function renderFullState(state) {
   renderTcgGrid();
   renderComicsGrid();
 
-
   trackedDeals = state.tracked_deals || [];
   renderTrackedDeals();
 
   hubEntries = state.product_hub || [];
   if (_activeTab === 'products') renderHubGrid();
   if (_hubDetailId) _renderHubDetail();
+
+  // Ensure add button label matches the current active tab
+  switchTab(_activeTab);
 
   const log = document.getElementById('log-body');
   log.innerHTML = '';
@@ -3427,6 +3450,9 @@ async function openSettingsModal() {
   document.getElementById('set-user-agent').value = data.user_agent || '';
   document.getElementById('set-browser-channel').value = data.browser_channel || '';
   document.getElementById('set-proxy').value = Array.isArray(data.proxy) ? data.proxy.join(String.fromCharCode(10)) : (data.proxy || '');
+  document.getElementById('set-proxycheap-key').value    = data.proxycheap_api_key    || '';
+  document.getElementById('set-proxycheap-secret').value = data.proxycheap_api_secret || '';
+  if (data.proxycheap_api_key && data.proxycheap_api_secret) loadProxyCheapBandwidth();
   document.getElementById('set-page-timeout').value = data.page_timeout_ms || 30000;
   document.getElementById('set-network-timeout').value = data.network_timeout_seconds || 15;
   document.getElementById('set-schedule-enabled').checked = data.schedule_enabled || false;
@@ -3500,6 +3526,66 @@ async function testDiscordDM() {
   if (data.status !== 'ok') alert(data.message);
 }
 
+async function debugProxyCheapBandwidth() {
+  const dbg = document.getElementById('proxycheap-bw-debug');
+  if (!dbg) return;
+  dbg.style.display = '';
+  dbg.textContent = 'Loading…';
+  try {
+    const r = await fetch('/api/proxycheap/bandwidth?debug=1');
+    const data = await r.json();
+    dbg.textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    dbg.textContent = 'Error: ' + e;
+  }
+}
+
+async function loadProxyCheapBandwidth() {
+  const widget = document.getElementById('proxycheap-bw-widget');
+  const rows   = document.getElementById('proxycheap-bw-rows');
+  if (!widget || !rows) return;
+  widget.style.display = '';
+  rows.innerHTML = '<div style="font-size:11px;color:var(--muted)">Loading…</div>';
+  try {
+    const r = await fetch('/api/proxycheap/bandwidth');
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({detail: r.statusText}));
+      rows.innerHTML = `<div style="font-size:11px;color:var(--red)">${esc(err.detail || 'Failed to fetch')}</div>`;
+      return;
+    }
+    const data = await r.json();
+    const list = data.proxies || [];
+    if (!list.length) {
+      rows.innerHTML = '<div style="font-size:11px;color:var(--muted)">No proxies returned</div>';
+      return;
+    }
+    rows.innerHTML = list.map(p => {
+      const total = p.total_gb;
+      const used  = p.used_gb;
+      const pct   = p.pct_used;
+      const remaining = p.remaining_gb;
+      const barFill = pct != null ? Math.min(100, Math.max(0, pct)) : 0;
+      const barColor = pct == null ? 'var(--muted)' : pct >= 90 ? 'var(--red)' : pct >= 70 ? 'var(--yellow)' : 'var(--green)';
+      const fmt = v => (v == null) ? '?' : (v >= 1 ? v.toFixed(2) : v.toFixed(3)) + ' GB';
+      const usedStr = (used == null) ? '?' : fmt(used);
+      const totalStr = fmt(total);
+      const expiry = p.expires_at ? `<span style="color:var(--muted);font-weight:400">· expires ${esc((p.expires_at || '').slice(0,10))}</span>` : '';
+      const headerLine = `<div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;margin-bottom:4px;gap:8px;flex-wrap:wrap">
+          <span style="font-weight:600">${esc(p.label || 'Proxy')} ${p.status ? `<span style="color:var(--muted);font-weight:400">· ${esc(p.status)}</span>` : ''} ${expiry}</span>
+          <span style="font-family:monospace">${usedStr} / ${totalStr}${pct != null ? ` (${pct}%)` : ''}</span>
+        </div>`;
+      const bar = `<div style="height:6px;background:var(--surface3);border-radius:3px;overflow:hidden">
+          <div style="width:${barFill}%;height:100%;background:${barColor};transition:width .3s"></div>
+        </div>`;
+      const remLine = remaining != null
+        ? `<div style="font-size:10px;color:var(--muted);margin-top:3px">${fmt(remaining)} remaining</div>` : '';
+      return `<div style="margin-bottom:8px">${headerLine}${bar}${remLine}</div>`;
+    }).join('');
+  } catch (e) {
+    rows.innerHTML = `<div style="font-size:11px;color:var(--red)">${esc(String(e))}</div>`;
+  }
+}
+
 async function saveSettingsModal() {
   const body = {
     check_interval_seconds: parseInt(document.getElementById('set-interval').value) || 1800,
@@ -3508,6 +3594,8 @@ async function saveSettingsModal() {
     user_agent: document.getElementById('set-user-agent').value.trim(),
     browser_channel: document.getElementById('set-browser-channel').value,
     proxy: document.getElementById('set-proxy').value.split(String.fromCharCode(10)).map(s=>s.trim()).filter(Boolean),
+    proxycheap_api_key:    document.getElementById('set-proxycheap-key').value.trim(),
+    proxycheap_api_secret: document.getElementById('set-proxycheap-secret').value.trim(),
     page_timeout_ms: parseInt(document.getElementById('set-page-timeout').value) || 30000,
     network_timeout_seconds: parseInt(document.getElementById('set-network-timeout').value) || 15,
     schedule_enabled: document.getElementById('set-schedule-enabled').checked,
@@ -4213,33 +4301,23 @@ function _hubAtcRetailerEnabled(entryId, retailer) {
 // Called whenever a new deal arrives — shows a clickable alert banner
 // (window.open from a WS callback is blocked by browsers; user must click)
 function _hubFireAtcTriggers(newDealId, prevSightingCount) {
-  // prevSightingCount: number of sightings the deal had BEFORE this update
-  console.log(`[ATC] trigger fired: dealId=${newDealId} prevSightings=${prevSightingCount} hubEntries=${hubEntries.length}`);
   const alerts = [];
   for (const entry of hubEntries) {
     const s = _hubAtcSettings(entry.id);
     if (!s.enabled) continue;
     const matched = _hubMatchedDeals(entry);
     const deal = matched.find(d => d.id === newDealId);
-    if (!deal) {
-      console.log(`[ATC] "${entry.name}": deal ${newDealId} not in matched (${matched.length} matched deals)`);
-      continue;
-    }
+    if (!deal) continue;
 
     const newSightings = (deal.sightings || []).slice(prevSightingCount ?? 0);
     const hasCanonicalNewSighting = newSightings.length === 0
       || newSightings.some(ns => _canonicalRetailer(ns.retailer) !== null);
-    if (!hasCanonicalNewSighting) {
-      console.log(`[ATC] "${entry.name}": new sightings are all non-canonical retailers`, newSightings.map(s=>s.retailer));
-      continue;
-    }
+    if (!hasCanonicalNewSighting) continue;
 
     const groups = _hubAtcByRetailer(matched);
     const enabledGroups = groups.filter(({retailer, urls}) => urls.length && _hubAtcRetailerEnabled(entry.id, retailer));
-    console.log(`[ATC] "${entry.name}": groups=${JSON.stringify(groups.map(g=>({retailer:g.retailer,urls:g.urls.length})))} enabled=${enabledGroups.length}`);
     if (enabledGroups.length) alerts.push({entry, deal, groups: enabledGroups});
   }
-  console.log(`[ATC] total alerts to show: ${alerts.length}`);
   if (!alerts.length) return;
 
   const container = document.getElementById('hub-atc-alerts');
@@ -4856,28 +4934,41 @@ function _hubDetailLinksHTML(entry, p) {
   ];
 
   const ignoredIds = entry.ignored_retailer_ids || {};
+  const confirmedKeys = entry.confirmed_retailer_ids || [];
   const retailerRows = retailers.map(r => {
     const val = pids[r.key] || '';
+    const isConfirmed = confirmedKeys.includes(r.key);
     const ignoredForKey = ignoredIds[r.key] || [];
     const ignoredNote = ignoredForKey.length
       ? `<span style="font-size:10px;color:var(--muted);margin-left:4px" title="Ignored: ${esc(ignoredForKey.join(', '))}">🚫 ${ignoredForKey.length} ignored</span>`
       : '';
+    const lockBtn = val
+      ? `<button class="btn btn-ghost btn-sm" style="font-size:13px;padding:3px 7px;${isConfirmed ? 'color:var(--green)' : 'color:var(--muted)'}"
+           title="${isConfirmed ? 'Confirmed — click to unlock' : 'Confirm this link (locks it to this item)'}"
+           onclick="toggleConfirmHubRetailerId('${entry.id}','${r.key}',${!isConfirmed})">${isConfirmed ? '🔒' : '🔓'}</button>`
+      : '';
     const actionBtns = val
       ? `<a href="${r.listFn(val)}" target="_blank" class="btn btn-ghost btn-sm" style="font-size:10px">View →</a>
          <a href="${r.atcFn(val)}" target="_blank" class="btn btn-primary btn-sm" style="font-size:10px">Add to Cart</a>
-         <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" title="Clear this ID and never auto-fill it again"
-           onclick="ignoreHubRetailerId('${entry.id}','${r.key}','${esc(val)}')">Unmap &amp; Ignore</button>`
+         ${!isConfirmed ? `<button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red)" title="Clear this ID and never auto-fill it again"
+           onclick="ignoreHubRetailerId('${entry.id}','${r.key}','${esc(val)}')">Unmap &amp; Ignore</button>` : ''}`
       : '';
-    return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
+    const confirmedBadge = isConfirmed
+      ? `<span style="font-size:10px;color:var(--green);font-weight:600">Confirmed — exclusively owned by this item</span>`
+      : '';
+    return `<div style="padding:10px 0;border-bottom:1px solid var(--border);${isConfirmed ? 'background:rgba(166,227,161,0.04);border-radius:6px;padding:10px 8px;' : ''}">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
         <strong style="font-size:12px;min-width:72px">${r.label}</strong>
+        ${lockBtn}
         <input type="text" class="form-input" id="hub-pid-${r.key}-${entry.id}" value="${esc(val)}" placeholder="${r.id_name}"
-          style="flex:1;max-width:200px;font-size:12px;font-family:monospace"
+          style="flex:1;max-width:200px;font-size:12px;font-family:monospace${isConfirmed ? ';border-color:var(--green);opacity:0.85' : ''}"
+          ${isConfirmed ? 'readonly title="Unlock to edit this ID"' : ''}
           onchange="saveHubProductId('${entry.id}','${r.key}',this.value)">
         <div style="display:flex;gap:4px;flex-wrap:wrap">${actionBtns}</div>
         ${ignoredNote}
       </div>
-      <div style="font-size:11px;color:var(--muted)">${r.help}</div>
+      ${confirmedBadge ? `<div style="margin-top:2px">${confirmedBadge}</div>` : ''}
+      ${!isConfirmed ? `<div style="font-size:11px;color:var(--muted)">${r.help}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -4960,6 +5051,24 @@ async function saveHubProductId(entryId, retailerKey, value) {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ids: {[retailerKey]: value}}),
   });
+}
+
+async function toggleConfirmHubRetailerId(entryId, retailerKey, confirmed) {
+  await fetch(`/api/product-hub/${entryId}/confirm-retailer-id`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({key: retailerKey, confirmed}),
+  });
+}
+
+function _isIdLockedByOther(retailerKey, idValue, currentEntryId) {
+  for (const e of hubEntries) {
+    if (e.id === currentEntryId) continue;
+    if ((e.retailer_product_ids || {})[retailerKey] === idValue &&
+        (e.confirmed_retailer_ids || []).includes(retailerKey)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function excludeHubDeal(entryId, dealId) {
@@ -5047,7 +5156,8 @@ function _parseRetailerIdFromUrl(url) {
 
 function _hubAutoFillRetailerIds(entry) {
   // Scan matched deal sighting URLs + checkout URLs for retailer IDs.
-  // Only fills fields that are currently empty AND not in the ignore list.
+  // Only fills fields that are currently empty AND not in the ignore list
+  // AND not already confirmed/locked by another entry.
   const existing = entry.retailer_product_ids || {};
   const ignored  = entry.ignored_retailer_ids || {};
   const matched  = _hubMatchedDeals(entry);
@@ -5056,9 +5166,11 @@ function _hubAutoFillRetailerIds(entry) {
   const activeIds = _extractIdsFromDeals(matched);
   for (const [key, valSet] of activeIds) {
     for (const value of valSet) {
-      if (!existing[key] && !found[key] && !(ignored[key] || []).includes(value)) {
+      if (!existing[key] && !found[key] &&
+          !(ignored[key] || []).includes(value) &&
+          !_isIdLockedByOther(key, value, entry.id)) {
         found[key] = value;
-        break; // take first valid value per retailer
+        break;
       }
     }
   }
@@ -5116,9 +5228,12 @@ async function retryHubAutoFill(entryId) {
   const excludedIds   = _extractIdsFromDeals(excludedDeals);
 
   // Unmap any existing ID whose only source was an excluded deal
+  // (skip confirmed/locked IDs — user has verified those manually)
+  const confirmed = entry.confirmed_retailer_ids || [];
   const unmapped = [];
   for (const [key, currentVal] of Object.entries(entry.retailer_product_ids || {})) {
     if (!currentVal) continue;
+    if (confirmed.includes(key)) continue; // never auto-unmap a confirmed ID
     const inActive   = (activeIds.get(key)   || new Set()).has(currentVal);
     const inExcluded = (excludedIds.get(key) || new Set()).has(currentVal);
     if (inExcluded && !inActive) {
@@ -5866,7 +5981,9 @@ function renderSalesChart(salesPoints) {
   const tcgIndividual = salesPoints.filter(s => s.source === 'TCGPlayer Sale');
   const ebaySales = salesPoints.filter(s => s.source === 'eBay');
 
-  const fmtDate = d => d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+  // Include year so dates from different years don't collide (e.g. "Feb 10" 2025 vs 2026)
+  const fmtDate = d => `${d.toLocaleDateString('en-US', {month:'short', day:'numeric'})} '${String(d.getFullYear()).slice(-2)}`;
+  // Build labels in chronological order from the already-sorted salesPoints
   const allLabels = [...new Set(salesPoints.map(s => fmtDate(s.x)))];
 
   // Clamp bucket lows: if a bucket's low is an IQR outlier vs all market prices, replace it
@@ -7891,7 +8008,10 @@ async function searchDiscordLog() {
     const reasonHTML = !isShown && r.reason
       ? `<span style="color:var(--yellow);font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.reason)}">${esc(r.reason)}</span>`
       : '';
-    return `<div style="display:grid;grid-template-columns:50px 50px 55px 60px 60px 160px 1fr;gap:6px;align-items:flex-start;font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
+    const assignBtn = `<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;flex-shrink:0"
+        title="Assign this Discord message to a watchlist item"
+        onclick="event.stopPropagation();openAssignDiscordPopup(this,'${esc(r.msg_id || '')}')">+ Assign</button>`;
+    return `<div style="display:grid;grid-template-columns:50px 50px 55px 60px 60px 160px 1fr 70px;gap:6px;align-items:flex-start;font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
       <span style="color:${color};font-weight:700;font-size:9px">${badge}</span>
       <span style="color:var(--muted)">${priceStr}</span>
       <span>${scoreBadge}</span>
@@ -7902,8 +8022,107 @@ async function searchDiscordLog() {
         <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${titleHTML}</div>
         <div style="color:var(--muted);font-size:9px">${esc(r.author)} · ${time}</div>
       </div>
+      <div style="display:flex;justify-content:flex-end">${assignBtn}</div>
     </div>`;
   }).join('');
+}
+
+// ── Assign Discord-log message to watchlist entry ──────────────────
+function openAssignDiscordPopup(anchorEl, msgId) {
+  // Close any existing popup
+  document.getElementById('assign-discord-popup')?.remove();
+  if (!msgId) return;
+  if (!hubEntries || !hubEntries.length) {
+    alert('No watchlist items yet — add one first.');
+    return;
+  }
+
+  const popup = document.createElement('div');
+  popup.id = 'assign-discord-popup';
+  popup.style.cssText = 'position:fixed;background:var(--surface2);border:1px solid var(--border);' +
+    'border-radius:6px;padding:6px;box-shadow:var(--shadow);z-index:10000;max-height:400px;' +
+    'overflow:auto;min-width:240px;font-size:12px';
+
+  const sorted = [...hubEntries].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  popup.innerHTML = `
+    <input type="text" class="form-input" id="assign-discord-search" placeholder="Search watchlist…"
+      style="width:100%;font-size:11px;margin-bottom:4px" autocomplete="off">
+    <div id="assign-discord-list" style="max-height:320px;overflow:auto">
+      ${sorted.map(e => `
+        <div class="assign-row" data-name="${esc((e.name || '').toLowerCase())}"
+             style="padding:5px 8px;border-radius:4px;cursor:pointer;display:flex;align-items:center;gap:6px"
+             onmouseenter="this.style.background='var(--surface3)'"
+             onmouseleave="this.style.background=''"
+             onclick="assignDiscordToEntry('${esc(msgId)}','${esc(e.id)}')">
+          ${e.image_url ? `<img src="${escUrl(e.image_url)}" style="width:22px;height:22px;object-fit:cover;border-radius:3px;flex-shrink:0">` : ''}
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.name)}</span>
+        </div>`).join('')}
+    </div>`;
+  document.body.appendChild(popup);
+
+  // Position next to button
+  const r = anchorEl.getBoundingClientRect();
+  const popH = Math.min(400, popup.offsetHeight);
+  let top = r.bottom + 4;
+  if (top + popH > window.innerHeight) top = Math.max(8, r.top - popH - 4);
+  let left = r.right - 240;
+  if (left < 8) left = 8;
+  popup.style.top  = top + 'px';
+  popup.style.left = left + 'px';
+
+  // Search filter
+  const search = document.getElementById('assign-discord-search');
+  search.focus();
+  search.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    popup.querySelectorAll('.assign-row').forEach(row => {
+      row.style.display = !q || row.dataset.name.includes(q) ? '' : 'none';
+    });
+  });
+
+  // Dismiss on outside click
+  setTimeout(() => {
+    const dismiss = (ev) => {
+      if (!popup.contains(ev.target)) {
+        popup.remove();
+        document.removeEventListener('mousedown', dismiss);
+      }
+    };
+    document.addEventListener('mousedown', dismiss);
+  }, 0);
+}
+
+async function assignDiscordToEntry(msgId, entryId) {
+  document.getElementById('assign-discord-popup')?.remove();
+  try {
+    const r = await fetch(`/api/product-hub/${entryId}/promote-discord-message`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({msg_id: msgId}),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({detail: r.statusText}));
+      _showToast(err.detail || 'Failed to assign', 'error');
+      return;
+    }
+    const data = await r.json();
+    const name = (hubEntries.find(e => e.id === entryId) || {}).name || 'watchlist item';
+    _showToast(`Assigned to "${name}"`, 'ok');
+  } catch (e) {
+    _showToast(String(e), 'error');
+  }
+}
+
+function _showToast(msg, kind) {
+  const t = document.createElement('div');
+  const bg = kind === 'error' ? 'rgba(243,139,168,.15)' : 'rgba(166,227,161,.15)';
+  const fg = kind === 'error' ? 'var(--red)' : 'var(--green)';
+  t.style.cssText = `position:fixed;bottom:20px;right:20px;background:${bg};color:${fg};` +
+    `padding:8px 14px;border-radius:6px;border:1px solid ${fg};font-size:12px;z-index:10001;` +
+    `box-shadow:var(--shadow);transition:opacity .3s`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2500);
 }
 
 async function saveDiscordMinPrice() {

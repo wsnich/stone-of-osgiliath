@@ -5,13 +5,14 @@ Read from config.stealth at runtime, with sensible fallbacks.
 
 import random
 import threading
+import time
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
-DEFAULT_PAGE_TIMEOUT = 30_000      # ms — browser page load
+DEFAULT_PAGE_TIMEOUT = 60_000      # ms — browser page load (60s for slow residential proxies)
 DEFAULT_NETWORK_TIMEOUT = 15       # seconds — HTTP requests
 
 
@@ -50,8 +51,11 @@ def get_browser_channel(stealth_cfg: dict | None = None) -> str | None:
 # different IPs.  Failed proxies can be marked bad via mark_proxy_bad() and
 # won't be selected again until the pool is reset.
 
-_bad_proxies: set[str] = set()
+_bad_proxies: dict[str, float] = {}   # proxy_url -> time.monotonic() when marked bad
+_proxy_fail_count: dict[str, int] = {}   # proxy_url -> consecutive failure count
 _bad_lock = threading.Lock()
+_BAD_PROXY_COOLDOWN = 120         # seconds before a bad proxy is eligible again
+_FAIL_THRESHOLD     = 2           # consecutive failures before marking bad
 
 
 def _parse_proxy_list(raw) -> list[str]:
@@ -94,28 +98,41 @@ def _parse_proxy_list(raw) -> list[str]:
 
 def get_proxy(stealth_cfg: dict | None = None) -> str | None:
     """Return one proxy URL chosen at random from the configured pool.
-    Skips proxies previously marked bad.  Returns None if no proxies configured.
+    Skips proxies marked bad within the cooldown window.  Returns None if
+    no proxies configured or all are still in cooldown.
     """
     if not stealth_cfg:
         return None
     pool = _parse_proxy_list(stealth_cfg.get("proxy"))
     if not pool:
         return None
+    now = time.monotonic()
     with _bad_lock:
-        available = [p for p in pool if p not in _bad_proxies]
+        available = [p for p in pool if now - _bad_proxies.get(p, 0) >= _BAD_PROXY_COOLDOWN]
     if not available:
-        # All marked bad — reset and try the full pool again
-        with _bad_lock:
-            _bad_proxies.clear()
-        available = pool
+        # All proxies in cooldown — return None so callers skip the proxy
+        return None
     return random.choice(available)
 
 
 def mark_proxy_bad(proxy_url: str) -> None:
-    """Flag a proxy as failed so it won't be picked until the pool resets."""
-    if proxy_url:
-        with _bad_lock:
-            _bad_proxies.add(proxy_url)
+    """Record a failure. Only puts the proxy in cooldown after _FAIL_THRESHOLD
+    consecutive failures — single transient failures don't penalize it."""
+    if not proxy_url:
+        return
+    with _bad_lock:
+        _proxy_fail_count[proxy_url] = _proxy_fail_count.get(proxy_url, 0) + 1
+        if _proxy_fail_count[proxy_url] >= _FAIL_THRESHOLD:
+            _bad_proxies[proxy_url] = time.monotonic()
+
+
+def mark_proxy_good(proxy_url: str) -> None:
+    """Reset the failure count after a successful use."""
+    if not proxy_url:
+        return
+    with _bad_lock:
+        _proxy_fail_count.pop(proxy_url, None)
+        _bad_proxies.pop(proxy_url, None)
 
 
 def playwright_proxy(stealth_cfg: dict | None = None) -> dict | None:

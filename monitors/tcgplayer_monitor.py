@@ -25,6 +25,10 @@ log = logging.getLogger("tcgplayer")
 
 from monitors.walmart_monitor import ProductResult
 
+# Serialize TCGPlayer checks — running multiple browser sessions through one
+# residential proxy IP causes timeouts and triggers TCGPlayer's rate limits.
+_tcg_check_lock = asyncio.Lock()
+
 # Keys to look for when deep-searching JSON responses
 _MARKET_KEYS = {"marketPrice", "market_price", "MarketPrice", "marketprice",
                 "midPrice", "mid_price"}
@@ -65,7 +69,23 @@ class TCGPlayerMonitor:
         # Append condition/printing filters from tags to the URL
         url = self._apply_filters(url, tags)
 
-        market_price, low_price, quantity, image_url, listing_prices, tcg_sales, price_history = await self._fetch_via_browser(url, name, stealth_cfg)
+        # Serialize all TCGPlayer browser checks — concurrent sessions through
+        # a single residential proxy timeout under load.
+        async with _tcg_check_lock:
+            # Re-check proxy cooldown INSIDE the lock — a previous serialized check
+            # may have just marked the proxy bad, and we shouldn't fall through to
+            # a direct hit on the home IP.
+            if stealth_cfg:
+                from monitors.defaults import _parse_proxy_list, get_proxy
+                if _parse_proxy_list(stealth_cfg.get("proxy")) and get_proxy(stealth_cfg) is None:
+                    log.info(f"{name}: proxy in cooldown — skipping TCGPlayer check")
+                    return ProductResult(
+                        name=name, url=url, price=None,
+                        available=False,
+                        error="Proxy in cooldown — check skipped",
+                    )
+
+            market_price, low_price, quantity, image_url, listing_prices, tcg_sales, price_history = await self._fetch_via_browser(url, name, stealth_cfg)
 
         if market_price is None and low_price is None:
             quantity = quantity or await self._fetch_quantity_api(url, stealth_cfg)
@@ -178,9 +198,10 @@ class TCGPlayerMonitor:
                 channel = get_browser_channel(stealth_cfg)
                 if channel:
                     launch_kw["channel"] = channel
-                from monitors.defaults import playwright_proxy, mark_proxy_bad, get_proxy
+                from monitors.defaults import playwright_proxy, mark_proxy_bad, mark_proxy_good, get_proxy, _parse_proxy_list
                 proxy = playwright_proxy(stealth_cfg)
-                _proxy_url = proxy["server"] if proxy else None
+                _proxy_url = None
+                _has_proxy_configured = bool(_parse_proxy_list(stealth_cfg.get("proxy") if stealth_cfg else None))
                 if proxy:
                     raw_url = get_proxy(stealth_cfg) or ""
                     if raw_url.startswith("socks5://") and proxy.get("username"):
@@ -188,9 +209,14 @@ class TCGPlayerMonitor:
                         from monitors.proxy_forwarder import start_local_proxy
                         local_port = await start_local_proxy(raw_url)
                         launch_kw["proxy"] = {"server": f"socks5://127.0.0.1:{local_port}"}
-                        _proxy_url = raw_url  # keep for error reporting
+                        _proxy_url = raw_url
                     else:
                         launch_kw["proxy"] = proxy
+                        _proxy_url = proxy["server"]
+                elif _has_proxy_configured:
+                    # Proxy configured but all in cooldown — should not reach here
+                    # (check_product already returns early); log and proceed without proxy
+                    log.warning(f"TCGPlayer: unexpected direct hit for {name} (proxy in cooldown)")
                 browser = await pw.chromium.launch(**launch_kw)
                 context = await browser.new_context(
                     user_agent=get_user_agent(stealth_cfg),
@@ -298,11 +324,15 @@ class TCGPlayerMonitor:
                 except Exception as _nav_err:
                     if _proxy_url:
                         mark_proxy_bad(_proxy_url)
-                        log.warning(f"TCGPlayer: proxy {_proxy_url} failed ({_nav_err}) — marked bad")
+                        log.warning(f"TCGPlayer: proxy {_proxy_url} failed ({_nav_err})")
                     raise
 
                 # Brief extra wait so late-firing XHR calls can complete
                 await asyncio.sleep(3)
+
+                # Navigation succeeded — reset proxy failure counter
+                if _proxy_url:
+                    mark_proxy_good(_proxy_url)
 
                 # Scrape filtered prices from the DOM — these reflect
                 # Condition/Printing filters that the API ignores

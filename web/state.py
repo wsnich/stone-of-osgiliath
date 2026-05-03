@@ -480,6 +480,7 @@ class ProductEntry:
     retailer_product_ids: dict = field(default_factory=dict)  # {amazon: ASIN, walmart: itemId, bestbuy: SKU, target: TCIN}
     excluded_deal_ids: list[str] = field(default_factory=list)  # explicitly excluded from auto-match
     ignored_retailer_ids: dict = field(default_factory=dict)    # {retailer_key: [value, ...]} — never auto-fill these
+    confirmed_retailer_ids: list[str] = field(default_factory=list)  # retailer keys the user has locked/confirmed
 
     def to_dict(self) -> dict:
         d = {
@@ -493,6 +494,7 @@ class ProductEntry:
             "retailer_product_ids": self.retailer_product_ids,
             "excluded_deal_ids": self.excluded_deal_ids,
             "ignored_retailer_ids": self.ignored_retailer_ids,
+            "confirmed_retailer_ids": self.confirmed_retailer_ids,
         }
         return d
 
@@ -510,6 +512,7 @@ class ProductEntry:
             retailer_product_ids=d.get("retailer_product_ids", {}),
             excluded_deal_ids=d.get("excluded_deal_ids", []),
             ignored_retailer_ids=d.get("ignored_retailer_ids", {}),
+            confirmed_retailer_ids=d.get("confirmed_retailer_ids", []),
         )
 
 
