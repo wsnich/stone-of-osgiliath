@@ -2580,7 +2580,8 @@ async def link_hub_tcgplayer(entry_id: str, body: dict):
     entry = product_hub.find_by_id(entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
-    entry.tcgplayer_index = body.get("index")
+    idx = body.get("tcgplayer_index", body.get("index"))
+    entry.tcgplayer_index = int(idx) if idx is not None else None
     product_hub.save_to_disk()
     await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
     return entry.to_dict()
