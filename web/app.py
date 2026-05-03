@@ -2021,8 +2021,7 @@ async def get_settings():
         "research_interval_hours": research.get("interval_hours", 168),
         "research_lookback_days":  research.get("lookback_days", 7),
         "research_max_findings":   research.get("max_findings", 7),
-        "proxycheap_api_key":    config.get("proxycheap", {}).get("api_key") or "",
-        "proxycheap_api_secret": config.get("proxycheap", {}).get("api_secret") or "",
+        "webshare_api_key":      config.get("webshare", {}).get("api_key") or "",
     }
 
 @app.put("/api/settings")
@@ -2088,94 +2087,102 @@ async def update_settings(body: dict):
         rc["lookback_days"] = max(1, min(90, int(body["research_lookback_days"])))
     if "research_max_findings" in body:
         rc["max_findings"] = max(1, min(20, int(body["research_max_findings"])))
-    pc = config.setdefault("proxycheap", {})
-    if "proxycheap_api_key" in body:
-        pc["api_key"] = body["proxycheap_api_key"].strip() or None
-    if "proxycheap_api_secret" in body:
-        pc["api_secret"] = body["proxycheap_api_secret"].strip() or None
+    ws = config.setdefault("webshare", {})
+    if "webshare_api_key" in body:
+        ws["api_key"] = body["webshare_api_key"].strip() or None
     save_config(config)
     await app_state.log("info", "Settings saved", "system")
     return {"status": "ok"}
 
-@app.get("/api/proxycheap/bandwidth")
-async def get_proxycheap_bandwidth(debug: bool = False):
-    """Fetch proxy bandwidth usage from the proxy-cheap REST API.
-    Tries several candidate paths since the public docs don't enumerate them.
-    Pass ?debug=1 to see the raw responses from each tried path.
-    """
+@app.get("/api/webshare/bandwidth")
+async def get_webshare_bandwidth(debug: bool = False):
+    """Fetch proxy bandwidth usage from the Webshare REST API. Aggregates data
+    from /subscription/, /subscription/plan/, /proxy/config/ and /proxy/list/."""
     config = load_config()
-    pc = config.get("proxycheap", {})
-    api_key    = pc.get("api_key", "")
-    api_secret = pc.get("api_secret", "")
-    if not api_key or not api_secret:
-        raise HTTPException(status_code=400, detail="proxy-cheap API key/secret not configured")
+    api_key = config.get("webshare", {}).get("api_key", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Webshare API key not configured")
 
     import aiohttp as _aiohttp
     import json as _json
-    url = "https://api.proxy-cheap.com/proxies"
-    headers = {"X-Api-Key": api_key, "X-Api-Secret": api_secret, "Accept": "application/json"}
+    headers = {"Authorization": f"Token {api_key}", "Accept": "application/json"}
 
-    attempts = []
-    data = None
+    debug_payload: dict = {}
 
-    async with _aiohttp.ClientSession() as session:
+    async def _get(session, url):
         try:
             async with session.get(url, headers=headers,
                                    timeout=_aiohttp.ClientTimeout(total=10)) as resp:
-                ct = resp.headers.get("content-type", "")
-                body = await resp.text()
-                attempts.append({
-                    "url": url, "status": resp.status, "content_type": ct,
-                    "body_snippet": body[:500],
-                })
+                text = await resp.text()
+                debug_payload[url] = {"status": resp.status, "body": text[:1500]}
                 if resp.status == 200:
-                    # proxy-cheap mislabels JSON responses as text/html — try to parse anyway
                     try:
-                        data = _json.loads(body)
-                    except Exception as e:
-                        attempts[-1]["parse_error"] = str(e)
+                        return _json.loads(text)
+                    except Exception:
+                        return None
         except Exception as e:
-            attempts.append({"url": url, "error": str(e)})
+            debug_payload[url] = {"error": str(e)}
+        return None
 
-    if data is None:
-        if debug:
-            return {"proxies": [], "error": "Failed to fetch", "attempts": attempts}
-        raise HTTPException(status_code=502,
-            detail="proxy-cheap API call failed. Add ?debug=1 to inspect the response.")
+    async with _aiohttp.ClientSession() as session:
+        sub        = await _get(session, "https://proxy.webshare.io/api/v2/subscription/")
+        plan       = await _get(session, "https://proxy.webshare.io/api/v2/subscription/plan/")
+        proxy_cfg  = await _get(session, "https://proxy.webshare.io/api/v2/proxy/config/")
+        proxy_list = await _get(session, "https://proxy.webshare.io/api/v2/proxy/list/?page_size=1&mode=direct")
 
-    # Normalise: API may return a list or {data: [...]} or {proxies: [...]}
-    proxies_list = data if isinstance(data, list) else data.get("data", data.get("proxies", []))
-    results = []
-    for p in (proxies_list if isinstance(proxies_list, list) else []):
-        if not isinstance(p, dict):
-            continue
-        bw = p.get("bandwidth") or {}
-        try: total = float(bw.get("total") or 0)
-        except: total = 0.0
-        try: used = float(bw.get("used") or 0)
-        except: used = 0.0
-        remaining = max(0.0, total - used) if total else None
+    # Merge all sources, picking the first non-null/non-zero match for each field
+    def pick(*objs_keys):
+        for o, k in objs_keys:
+            if o and isinstance(o, dict) and o.get(k) not in (None, 0):
+                return o[k]
+        return None
 
-        net = p.get("networkType") or ""
-        ptype = p.get("proxyType") or ""
-        label_parts = [s for s in (net, ptype) if s]
-        label = " ".join(label_parts) or str(p.get("id", ""))
+    sources = [sub or {}, plan or {}, proxy_cfg or {}]
+    bw_total = None
+    bw_used  = None
+    for o in sources:
+        for k in ("bandwidth_limit", "bandwidth", "bandwidth_total",
+                  "monthly_bandwidth", "monthly_bandwidth_limit"):
+            if o.get(k) not in (None, 0):
+                bw_total = o[k]
+                break
+        if bw_total: break
+    for o in sources:
+        for k in ("bandwidth_used", "bandwidth_consumed", "used_bandwidth",
+                  "monthly_bandwidth_used"):
+            if o.get(k) is not None:
+                bw_used = o[k]
+                break
+        if bw_used is not None: break
 
-        results.append({
-            "id":        p.get("id"),
-            "label":     label,
-            "status":    p.get("status", ""),
-            "expires_at": p.get("expiresAt"),
-            "total_gb":  total or None,
-            "used_gb":   used,
-            "remaining_gb": remaining,
-            "pct_used":  round(used / total * 100, 1) if total else None,
-        })
+    plan_name = (plan.get("name") if plan else None) or (proxy_cfg.get("plan_name") if proxy_cfg else None) or "Webshare"
+    proxy_count = (proxy_list.get("count") if proxy_list else None) \
+                  or (proxy_cfg.get("proxy_count") if proxy_cfg else None)
+    period_end = sub.get("end_date") if sub else None
 
-    out = {"proxies": results}
+    total_gb = float(bw_total) / 1e9 if bw_total else None
+    used_gb  = float(bw_used)  / 1e9 if bw_used  is not None else 0.0
+    remaining_gb = max(0.0, total_gb - used_gb) if total_gb else None
+    pct = round(used_gb / total_gb * 100, 1) if total_gb else None
+
+    label_parts = [str(plan_name)]
+    if proxy_count:
+        label_parts.append(f"{proxy_count} IPs")
+
+    proxies = [{
+        "id": "webshare",
+        "label": " · ".join(label_parts),
+        "status": "ACTIVE" if total_gb else "",
+        "expires_at": period_end,
+        "total_gb": total_gb,
+        "used_gb": used_gb,
+        "remaining_gb": remaining_gb,
+        "pct_used": pct,
+    }]
+
+    out = {"proxies": proxies}
     if debug:
-        out["raw"] = data
-        out["attempts"] = attempts
+        out["debug"] = debug_payload
     return out
 
 

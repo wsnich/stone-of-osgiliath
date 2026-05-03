@@ -1965,22 +1965,16 @@ select.form-input option { background: var(--surface2); }
             <textarea class="form-input" id="set-proxy" rows="4" placeholder="One proxy per line, e.g.:&#10;socks5://host:1080&#10;http://user:pass@host2:3128" style="font-size:11px;font-family:monospace;resize:vertical"></textarea>
             <div style="font-size:10px;color:var(--muted);margin-top:2px">One proxy per line. Each product check picks a random proxy. Failed proxies are skipped for 5 minutes after a failure.</div>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div>
-              <label class="form-label">proxy-cheap API Key <span style="color:var(--muted);font-weight:400;font-size:10px">(optional — for bandwidth display)</span></label>
-              <input type="password" class="form-input" id="set-proxycheap-key" placeholder="API Key" autocomplete="off">
-            </div>
-            <div>
-              <label class="form-label">proxy-cheap API Secret</label>
-              <input type="password" class="form-input" id="set-proxycheap-secret" placeholder="API Secret" autocomplete="off">
-            </div>
+          <div>
+            <label class="form-label">Webshare API Key <span style="color:var(--muted);font-weight:400;font-size:10px">(optional — for bandwidth display)</span></label>
+            <input type="password" class="form-input" id="set-webshare-key" placeholder="API Key" autocomplete="off">
           </div>
           <div id="proxycheap-bw-widget" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:6px">
               <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Proxy Bandwidth</span>
               <div style="display:flex;gap:4px">
-                <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="loadProxyCheapBandwidth()">↻ Refresh</button>
-                <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="debugProxyCheapBandwidth()">Debug</button>
+                <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="loadProxyBandwidth('webshare')">↻ Refresh</button>
+                <button class="btn btn-ghost btn-sm" style="font-size:10px" onclick="debugProxyBandwidth('webshare')">Debug</button>
               </div>
             </div>
             <div id="proxycheap-bw-rows"></div>
@@ -3450,9 +3444,8 @@ async function openSettingsModal() {
   document.getElementById('set-user-agent').value = data.user_agent || '';
   document.getElementById('set-browser-channel').value = data.browser_channel || '';
   document.getElementById('set-proxy').value = Array.isArray(data.proxy) ? data.proxy.join(String.fromCharCode(10)) : (data.proxy || '');
-  document.getElementById('set-proxycheap-key').value    = data.proxycheap_api_key    || '';
-  document.getElementById('set-proxycheap-secret').value = data.proxycheap_api_secret || '';
-  if (data.proxycheap_api_key && data.proxycheap_api_secret) loadProxyCheapBandwidth();
+  document.getElementById('set-webshare-key').value = data.webshare_api_key || '';
+  if (data.webshare_api_key) loadProxyBandwidth('webshare');
   document.getElementById('set-page-timeout').value = data.page_timeout_ms || 30000;
   document.getElementById('set-network-timeout').value = data.network_timeout_seconds || 15;
   document.getElementById('set-schedule-enabled').checked = data.schedule_enabled || false;
@@ -3526,13 +3519,13 @@ async function testDiscordDM() {
   if (data.status !== 'ok') alert(data.message);
 }
 
-async function debugProxyCheapBandwidth() {
+async function debugProxyBandwidth(provider) {
   const dbg = document.getElementById('proxycheap-bw-debug');
   if (!dbg) return;
   dbg.style.display = '';
   dbg.textContent = 'Loading…';
   try {
-    const r = await fetch('/api/proxycheap/bandwidth?debug=1');
+    const r = await fetch(`/api/${provider}/bandwidth?debug=1`);
     const data = await r.json();
     dbg.textContent = JSON.stringify(data, null, 2);
   } catch (e) {
@@ -3540,14 +3533,17 @@ async function debugProxyCheapBandwidth() {
   }
 }
 
-async function loadProxyCheapBandwidth() {
+let _currentProxyProvider = null;
+
+async function loadProxyBandwidth(provider) {
+  _currentProxyProvider = provider;
   const widget = document.getElementById('proxycheap-bw-widget');
   const rows   = document.getElementById('proxycheap-bw-rows');
   if (!widget || !rows) return;
   widget.style.display = '';
   rows.innerHTML = '<div style="font-size:11px;color:var(--muted)">Loading…</div>';
   try {
-    const r = await fetch('/api/proxycheap/bandwidth');
+    const r = await fetch(`/api/${provider}/bandwidth`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({detail: r.statusText}));
       rows.innerHTML = `<div style="font-size:11px;color:var(--red)">${esc(err.detail || 'Failed to fetch')}</div>`;
@@ -3594,8 +3590,7 @@ async function saveSettingsModal() {
     user_agent: document.getElementById('set-user-agent').value.trim(),
     browser_channel: document.getElementById('set-browser-channel').value,
     proxy: document.getElementById('set-proxy').value.split(String.fromCharCode(10)).map(s=>s.trim()).filter(Boolean),
-    proxycheap_api_key:    document.getElementById('set-proxycheap-key').value.trim(),
-    proxycheap_api_secret: document.getElementById('set-proxycheap-secret').value.trim(),
+    webshare_api_key: document.getElementById('set-webshare-key').value.trim(),
     page_timeout_ms: parseInt(document.getElementById('set-page-timeout').value) || 30000,
     network_timeout_seconds: parseInt(document.getElementById('set-network-timeout').value) || 15,
     schedule_enabled: document.getElementById('set-schedule-enabled').checked,
@@ -5981,81 +5976,76 @@ function renderSalesChart(salesPoints) {
   const tcgIndividual = salesPoints.filter(s => s.source === 'TCGPlayer Sale');
   const ebaySales = salesPoints.filter(s => s.source === 'eBay');
 
-  // Include year so dates from different years don't collide (e.g. "Feb 10" 2025 vs 2026)
+  // Use numeric timestamp x-axis so points always plot at their actual date
+  // (category-based mapping was misplacing late-arriving sales past the chart)
+  const ts = d => d.getTime();
   const fmtDate = d => `${d.toLocaleDateString('en-US', {month:'short', day:'numeric'})} '${String(d.getFullYear()).slice(-2)}`;
-  // Build labels in chronological order from the already-sorted salesPoints
-  const allLabels = [...new Set(salesPoints.map(s => fmtDate(s.x)))];
 
   // Clamp bucket lows: if a bucket's low is an IQR outlier vs all market prices, replace it
   // with the market price (handles fraudulent $4.99-type sales baked into TCGPlayer history)
   if (tcgHistory.length >= 4) {
-    const marketPrices = tcgHistory.map(s => s.y).filter(v => v > 0);
-    const outlierSet = iqrOutlierSet(marketPrices);
-    // Also detect if the low itself is an extreme outlier relative to market prices
     const allLows = tcgHistory.map(s => s.low || s.y).filter(v => v > 0);
     const lowOutliers = iqrOutlierSet(allLows);
     for (const s of tcgHistory) {
       if (s.low && lowOutliers.has(s.low)) {
-        s.low = s.y;  // replace outlier low with that day's market price
+        s.low = s.y;
       }
     }
   }
 
   const datasets = [];
 
-  // TCGPlayer daily market price as a line
   if (tcgHistory.length) {
     datasets.push({
-      label: 'TCG Market', type: 'line',
-      data: tcgHistory.map(s => ({x: fmtDate(s.x), y: s.y})),
+      label: 'TCG Market', type: 'line', showLine: true,
+      data: tcgHistory.map(s => ({x: ts(s.x), y: s.y})),
       borderColor: '#f38ba8', backgroundColor: 'rgba(243,139,168,0.08)',
       pointBackgroundColor: '#f38ba8', pointRadius: 3, pointHoverRadius: 6,
       borderWidth: 2, tension: 0.3, fill: true, order: 2,
     });
-    // Low-high range as a faded band
     datasets.push({
-      label: 'TCG Low', type: 'line',
-      data: tcgHistory.map(s => ({x: fmtDate(s.x), y: s.low || s.y})),
+      label: 'TCG Low', type: 'line', showLine: true,
+      data: tcgHistory.map(s => ({x: ts(s.x), y: s.low || s.y})),
       borderColor: 'rgba(243,139,168,0.3)', borderWidth: 1, borderDash: [3,3],
       pointRadius: 0, tension: 0.3, fill: false, order: 3,
     });
     datasets.push({
-      label: 'TCG High', type: 'line',
-      data: tcgHistory.map(s => ({x: fmtDate(s.x), y: s.high || s.y})),
+      label: 'TCG High', type: 'line', showLine: true,
+      data: tcgHistory.map(s => ({x: ts(s.x), y: s.high || s.y})),
       borderColor: 'rgba(243,139,168,0.3)', borderWidth: 1, borderDash: [3,3],
       pointRadius: 0, tension: 0.3, fill: '-1', backgroundColor: 'rgba(243,139,168,0.06)', order: 3,
     });
   }
 
-  // Individual TCGPlayer sales as triangles
   if (tcgIndividual.length) {
     datasets.push({
       label: 'TCG Sales', type: 'scatter',
-      data: tcgIndividual.map(s => ({x: fmtDate(s.x), y: s.y})),
+      data: tcgIndividual.map(s => ({x: ts(s.x), y: s.y})),
       backgroundColor: '#f38ba8', borderColor: '#f38ba8',
       pointRadius: 5, pointHoverRadius: 7, pointStyle: 'triangle',
       order: 1,
     });
   }
 
-  // eBay sold as squares
   if (ebaySales.length) {
     datasets.push({
       label: 'eBay Sold', type: 'scatter',
-      data: ebaySales.map(s => ({x: fmtDate(s.x), y: s.y})),
+      data: ebaySales.map(s => ({x: ts(s.x), y: s.y})),
       backgroundColor: '#fab387', borderColor: '#fab387',
       pointRadius: 5, pointHoverRadius: 7, pointStyle: 'rect',
       order: 1,
     });
   }
 
-  // ManaPool current low price as a flat dashed reference line
+  // ManaPool current low — flat reference line spanning the full date range
   const _mpP = products[_histogramProductIndex];
-  if (_mpP?.mp_low_price != null && allLabels.length) {
+  if (_mpP?.mp_low_price != null && salesPoints.length) {
+    const xMin = ts(salesPoints[0].x);
+    const xMax = ts(salesPoints[salesPoints.length - 1].x);
     datasets.push({
       label: `MP Low ($${_mpP.mp_low_price.toFixed(2)})`,
-      type: 'line',
-      data: allLabels.map(l => ({x: l, y: _mpP.mp_low_price})),
+      type: 'line', showLine: true,
+      data: [{x: xMin, y: _mpP.mp_low_price}, {x: xMax, y: _mpP.mp_low_price}],
       borderColor: '#89dceb', borderWidth: 1.5, borderDash: [4, 4],
       pointRadius: 0, tension: 0, fill: false, order: 4,
     });
@@ -6063,7 +6053,7 @@ function renderSalesChart(salesPoints) {
 
   _histogramSalesChart = new Chart(canvas, {
     type: 'scatter',
-    data: { labels: allLabels, datasets },
+    data: { datasets },
     options: {
       responsive: true, maintainAspectRatio: false,
       animation: { duration: 300 },
@@ -6074,16 +6064,25 @@ function renderSalesChart(salesPoints) {
           backgroundColor: '#1c1c28', borderColor: '#2e2e42', borderWidth: 1,
           titleColor: '#cdd6f4', bodyColor: '#cdd6f4',
           callbacks: {
+            title: ctx => ctx[0] ? fmtDate(new Date(ctx[0].parsed.x)) : '',
             label: ctx => {
               const pt = ctx.raw;
-              const match = salesPoints.find(s => fmtDate(s.x) === pt.x && Math.abs(s.y - pt.y) < 0.01);
+              const match = salesPoints.find(s => ts(s.x) === pt.x && Math.abs(s.y - pt.y) < 0.01);
               return match ? ` ${match.label}` : ` $${pt.y.toFixed(2)}`;
             },
           },
         },
       },
       scales: {
-        x: { type: 'category', ticks: { color: '#585878', font: { size: 10 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 10 }, grid: { color: '#2e2e42' } },
+        x: {
+          type: 'linear',
+          ticks: {
+            color: '#585878', font: { size: 10 }, maxRotation: 45,
+            autoSkip: true, maxTicksLimit: 10,
+            callback: v => fmtDate(new Date(v)),
+          },
+          grid: { color: '#2e2e42' },
+        },
         y: {
           ticks: { color: '#585878', font: { size: 10 }, callback: v => `$${Number(v).toFixed(2)}` },
           grid: { color: '#2e2e42' },
@@ -7237,7 +7236,7 @@ function renderTrackedDeals() {
 
 function dealTableRowHTML(d) {
   const bp = d.best_price != null ? `$${d.best_price.toFixed(2)}` : '—';
-  const scoreBadge = _dealScoreBadge(d.name, d.best_price);
+  const scoreBadge = _dealScoreBadge(d.name, d.best_price, {dealId: d.id});
   const retailers = Object.keys(d.retailer_prices || {}).join(', ') || '—';
   const count = d.sightings ? d.sightings.length : 0;
   const ago = d.last_seen ? trackedDealTimeAgo(d.last_seen) : '';
@@ -7681,11 +7680,44 @@ function renderDiscordFeed() {
   updateDiscordExpandBtn();
 }
 
-function _scoreDeal(title, price) {
-  // Compare a deal's price against our TCGPlayer market data
-  if (!price || !title) return null;
+// Look up the watchlist-linked TCG product for a deal, given either
+// {msgId} (Discord row), {dealId} (TrackedDeal), or {entry} (hub entry).
+// Returns the products[] entry referenced by the hub's tcgplayer_index, or null.
+function _resolveLinkedProduct(ctx) {
+  if (!ctx) return null;
+  let entry = ctx.entry || null;
+  if (!entry) {
+    let deal = null;
+    if (ctx.dealId && typeof trackedDeals !== 'undefined') {
+      deal = trackedDeals.find(d => d.id === ctx.dealId);
+    } else if (ctx.msgId && typeof trackedDeals !== 'undefined') {
+      deal = trackedDeals.find(d => (d.sightings || []).some(s => s.msg_id === ctx.msgId));
+    }
+    if (!deal) return null;
+    entry = (hubEntries || []).find(e => (e.deal_ids || []).includes(deal.id));
+  }
+  if (!entry || entry.tcgplayer_index == null) return null;
+  const prod = products[entry.tcgplayer_index];
+  return (prod && prod.price != null) ? prod : null;
+}
+
+function _scoreDeal(title, price, linkedProduct) {
+  // Compare a deal's price against our TCGPlayer market data.
+  // If linkedProduct is supplied (deal is explicitly assigned to a watchlist
+  // item with a TCG link), use it directly — skip the fuzzy match.
+  if (!price) return null;
+  if (linkedProduct && linkedProduct.price != null) {
+    const market = linkedProduct.price;
+    return {
+      market,
+      pct: ((price - market) / market) * 100,
+      productName: linkedProduct.name,
+      linked: true,
+    };
+  }
+  if (!title) return null;
   const titleLower = title.toLowerCase();
-  // Find best matching TCGPlayer product
+  // Find best matching TCGPlayer product via word overlap
   let bestMatch = null;
   let bestOverlap = 0;
   const titleWords = new Set(titleLower.replace(/[^\w\s]/g, ' ').split(/\s+/).filter(w => w.length > 2));
@@ -7702,24 +7734,27 @@ function _scoreDeal(title, price) {
   }
   if (!bestMatch) return null;
   const market = bestMatch.price;
-  const pctDiff = ((price - market) / market) * 100;
   return {
     market,
-    pct: pctDiff,
+    pct: ((price - market) / market) * 100,
     productName: bestMatch.name,
+    linked: false,
   };
 }
 
-function _dealScoreBadge(title, price) {
-  const score = _scoreDeal(title, price);
+function _dealScoreBadge(title, price, ctx) {
+  const linked = _resolveLinkedProduct(ctx);
+  const score = _scoreDeal(title, price, linked);
   if (!score) return '';
   const pct = score.pct;
+  const linkIcon = score.linked ? '🔗 ' : '';
+  const tip = `${linkIcon}vs TCG $${score.market.toFixed(2)} (${score.productName})`;
   if (pct <= -5) {
-    return `<span title="vs TCG $${score.market.toFixed(2)} (${score.productName})" style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:#1a3020;color:var(--green)">${Math.abs(pct).toFixed(0)}% below</span>`;
+    return `<span title="${tip}" style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:#1a3020;color:var(--green)">${Math.abs(pct).toFixed(0)}% below</span>`;
   } else if (pct >= 5) {
-    return `<span title="vs TCG $${score.market.toFixed(2)} (${score.productName})" style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:#2a1020;color:var(--red)">${pct.toFixed(0)}% above</span>`;
+    return `<span title="${tip}" style="font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:#2a1020;color:var(--red)">${pct.toFixed(0)}% above</span>`;
   }
-  return `<span title="vs TCG $${score.market.toFixed(2)} (${score.productName})" style="font-size:9px;padding:1px 4px;border-radius:3px;background:var(--surface3);color:var(--muted)">~market</span>`;
+  return `<span title="${tip}" style="font-size:9px;padding:1px 4px;border-radius:3px;background:var(--surface3);color:var(--muted)">~market</span>`;
 }
 
 function discordPostHTML(p, idx, sortedList) {
@@ -7731,7 +7766,7 @@ function discordPostHTML(p, idx, sortedList) {
   const title = _discordExtractTitle(p);
   const url = _discordExtractUrl(p);
   const dcIdx = discordPosts.indexOf(p);
-  const scoreBadge = _dealScoreBadge(title, p.price);
+  const scoreBadge = _dealScoreBadge(title, p.price, {msgId: p.id});
 
   const titleLink = url
     ? `<a href="${escUrl(url)}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none;font-size:11px">${esc(title)} ↗</a>`
@@ -8001,16 +8036,14 @@ async function searchDiscordLog() {
     const chName = _channelNameCache[r.channel_id] || '';
     const retailerHTML = retailer ? `<span style="color:var(--blue);font-size:9px">${esc(retailer)}</span>` : '';
     const time = r.timestamp ? new Date(r.timestamp).toLocaleString() : r.logged_at;
-    const scoreBadge = _dealScoreBadge(title, r.price);
+    const scoreBadge = _dealScoreBadge(title, r.price, {msgId: r.msg_id});
     const titleHTML = productUrl
       ? `<a href="${escUrl(productUrl)}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:none">${esc(title)} ↗</a>`
       : esc(title);
     const reasonHTML = !isShown && r.reason
       ? `<span style="color:var(--yellow);font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.reason)}">${esc(r.reason)}</span>`
       : '';
-    const assignBtn = `<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;flex-shrink:0"
-        title="Assign this Discord message to a watchlist item"
-        onclick="event.stopPropagation();openAssignDiscordPopup(this,'${esc(r.msg_id || '')}')">+ Assign</button>`;
+    const assignBtn = _buildDiscordAssignBtn(r, retailer);
     return `<div style="display:grid;grid-template-columns:50px 50px 55px 60px 60px 160px 1fr 70px;gap:6px;align-items:flex-start;font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
       <span style="color:${color};font-weight:700;font-size:9px">${badge}</span>
       <span style="color:var(--muted)">${priceStr}</span>
@@ -8028,6 +8061,58 @@ async function searchDiscordLog() {
 }
 
 // ── Assign Discord-log message to watchlist entry ──────────────────
+
+// Map UI retailer label -> retailer key used by confirmed_retailer_ids
+const _DISCORD_RETAILER_KEY = {
+  'Amazon': 'amazon',
+  'Walmart': 'walmart',
+  'Target': 'target',
+  'Best Buy': 'bestbuy',
+};
+
+// Returns {state: 'unassigned' | 'assigned' | 'locked', entry: ProductEntry|null}
+function _getDiscordRowAssignState(row, retailerLabel) {
+  const msgId = row.msg_id;
+  if (!msgId || typeof trackedDeals === 'undefined' || !trackedDeals.length) {
+    return {state: 'unassigned', entry: null};
+  }
+  // Find tracked deal that contains this msg_id in its sightings
+  const deal = trackedDeals.find(d =>
+    (d.sightings || []).some(s => s.msg_id === msgId)
+  );
+  if (!deal) return {state: 'unassigned', entry: null};
+
+  // Find the hub entry that owns this deal
+  const owner = (hubEntries || []).find(e =>
+    (e.deal_ids || []).includes(deal.id)
+  );
+  if (!owner) return {state: 'unassigned', entry: null};
+
+  // If the row's retailer is among the entry's confirmed (locked) retailer keys, it's locked
+  const key = _DISCORD_RETAILER_KEY[retailerLabel];
+  const isLocked = key && (owner.confirmed_retailer_ids || []).includes(key);
+  return {state: isLocked ? 'locked' : 'assigned', entry: owner};
+}
+
+function _buildDiscordAssignBtn(row, retailerLabel) {
+  const {state, entry} = _getDiscordRowAssignState(row, retailerLabel);
+  const msgId = esc(row.msg_id || '');
+  if (state === 'locked') {
+    return `<button class="btn btn-ghost btn-sm" disabled
+        style="font-size:9px;padding:2px 6px;flex-shrink:0;color:var(--muted);cursor:not-allowed;opacity:0.7"
+        title="Locked to '${esc(entry.name)}' (retailer link confirmed)">🔒 Locked</button>`;
+  }
+  if (state === 'assigned') {
+    return `<button class="btn btn-ghost btn-sm"
+        style="font-size:9px;padding:2px 6px;flex-shrink:0;color:var(--green);border-color:var(--gold-dim)"
+        title="Assigned to '${esc(entry.name)}' — click to reassign"
+        onclick="event.stopPropagation();openAssignDiscordPopup(this,'${msgId}')">✓ Assigned</button>`;
+  }
+  return `<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;flex-shrink:0"
+      title="Assign this Discord message to a watchlist item"
+      onclick="event.stopPropagation();openAssignDiscordPopup(this,'${msgId}')">+ Assign</button>`;
+}
+
 function openAssignDiscordPopup(anchorEl, msgId) {
   // Close any existing popup
   document.getElementById('assign-discord-popup')?.remove();
@@ -8108,6 +8193,10 @@ async function assignDiscordToEntry(msgId, entryId) {
     const data = await r.json();
     const name = (hubEntries.find(e => e.id === entryId) || {}).name || 'watchlist item';
     _showToast(`Assigned to "${name}"`, 'ok');
+    // Re-render the Discord log so the button reflects the new state
+    if (document.getElementById('discord-log-results')) {
+      searchDiscordLog();
+    }
   } catch (e) {
     _showToast(String(e), 'error');
   }
