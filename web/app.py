@@ -372,6 +372,43 @@ async def discord_gateway_loop():
                             await app_state.log("info",
                                 f"Skipped Best Buy DM (manual unwinnable): {title[:60]}", "discord")
                             dm_user = None  # short-circuit the rest of the DM block
+
+                        # Per-URL mute: if any owning watchlist entry has a muted
+                        # retailer_url whose host matches this deal's URL host,
+                        # skip the DM. Useful when one source consistently posts
+                        # at a price that's too high to act on.
+                        if dm_user:
+                            from urllib.parse import urlparse
+                            deal_url = ""
+                            for _e in entry.get("embeds", []):
+                                _u = _e.get("url", "")
+                                if _u and not any(skip in _u for skip in [
+                                    "refractbot", "valoraio", "google.com/aclk",
+                                    "google.com/url", "gclid=",
+                                ]):
+                                    deal_url = _u
+                                    break
+                            def _bare_host(u: str) -> str:
+                                h = urlparse(u).netloc.lower()
+                                return h[4:] if h.startswith("www.") else h
+                            deal_host = _bare_host(deal_url) if deal_url else ""
+                            if deal_host:
+                                muted_match = None
+                                for _hub in product_hub.entries:
+                                    if tracked.id not in (_hub.deal_ids or []):
+                                        continue
+                                    for _rl in (_hub.retailer_urls or []):
+                                        if not _rl.muted: continue
+                                        rl_host = _bare_host(_rl.url)
+                                        if rl_host and rl_host == deal_host:
+                                            muted_match = (_hub.name, _rl.retailer)
+                                            break
+                                    if muted_match: break
+                                if muted_match:
+                                    await app_state.log("info",
+                                        f"Skipped DM ({muted_match[1]} muted on '{muted_match[0]}'): {title[:60]}",
+                                        "discord")
+                                    dm_user = None
                         price = entry.get("price")
 
                         # Optionally find matching TCGPlayer product for price context
@@ -3985,6 +4022,26 @@ async def remove_hub_retailer(entry_id: str, retailer: str):
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
     entry.retailer_urls = [r for r in entry.retailer_urls if r.retailer.lower() != retailer.lower()]
+    product_hub.save_to_disk()
+    await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
+    return entry.to_dict()
+
+
+@app.post("/api/product-hub/{entry_id}/retailer/{retailer}/mute")
+async def toggle_hub_retailer_mute(entry_id: str, retailer: str, body: dict):
+    """Mute/unmute Discord DMs for deals matching this retailer URL.
+    Body: {muted: bool}. Match is case-insensitive on the retailer name."""
+    entry = product_hub.find_by_id(entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    target = bool(body.get("muted", True))
+    found = False
+    for r in entry.retailer_urls:
+        if r.retailer.lower() == retailer.lower():
+            r.muted = target
+            found = True
+    if not found:
+        raise HTTPException(status_code=404, detail="Retailer URL not found")
     product_hub.save_to_disk()
     await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
     return entry.to_dict()

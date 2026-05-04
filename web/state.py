@@ -463,6 +463,7 @@ class DealTracker:
 class RetailerLink:
     retailer: str
     url: str
+    muted: bool = False  # if True, suppress Discord DMs for deals from this URL/host
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -506,7 +507,9 @@ class ProductEntry:
 
     @classmethod
     def from_dict(cls, d: dict) -> "ProductEntry":
-        urls = [RetailerLink(**r) for r in d.get("retailer_urls", [])]
+        urls = [RetailerLink(retailer=r.get("retailer",""), url=r.get("url",""),
+                              muted=bool(r.get("muted", False)))
+                for r in d.get("retailer_urls", [])]
         max_total = d.get("auto_atc_max_total")
         try: max_total = float(max_total) if max_total is not None else None
         except (TypeError, ValueError): max_total = None

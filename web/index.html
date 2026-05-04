@@ -5327,12 +5327,22 @@ function _hubDetailLinksHTML(entry, p) {
   }).join('');
 
   // Retailer URLs (free-form)
-  const urlRows = (entry.retailer_urls || []).map(r =>
-    `<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
-      <a href="${escUrl(r.url)}" target="_blank" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.retailer)}: ${esc(r.url)}</a>
+  const urlRows = (entry.retailer_urls || []).map(r => {
+    const muted = !!r.muted;
+    const muteBtn = `<button class="btn btn-ghost btn-sm" style="font-size:11px;flex-shrink:0;color:${muted?'var(--red)':'var(--muted)'}"
+      onclick="toggleHubRetailerMute('${entry.id}','${esc(r.retailer)}',${!muted})"
+      title="${muted?'Unmute — get DMs again for this URL':'Mute Discord DMs for deals from this URL'}">
+      ${muted?'🔕 Muted':'🔔'}
+    </button>`;
+    const linkStyle = muted
+      ? 'flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);text-decoration:line-through'
+      : 'flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0">
+      <a href="${escUrl(r.url)}" target="_blank" style="${linkStyle}">${esc(r.retailer)}: ${esc(r.url)}</a>
+      ${muteBtn}
       <button class="btn btn-ghost btn-sm" style="font-size:10px;color:var(--red);flex-shrink:0" onclick="removeHubRetailerFromDetail('${entry.id}','${esc(r.retailer)}')">✕</button>
-    </div>`
-  ).join('');
+    </div>`;
+  }).join('');
 
   return `
   <div style="margin-bottom:20px">
@@ -5455,6 +5465,13 @@ async function addHubRetailerFromDetail(entryId) {
 
 async function removeHubRetailerFromDetail(entryId, retailer) {
   await fetch(`/api/product-hub/${entryId}/retailer/${encodeURIComponent(retailer)}`, {method: 'DELETE'});
+}
+
+async function toggleHubRetailerMute(entryId, retailer, muted) {
+  await fetch(`/api/product-hub/${entryId}/retailer/${encodeURIComponent(retailer)}/mute`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({muted: !!muted}),
+  });
 }
 
 // ── Retailer ID auto-extraction from deal URLs ──────────────────
