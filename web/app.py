@@ -39,6 +39,7 @@ from monitors.account_manager import (
     account_manager, set_data_dir as set_accounts_data_dir,
     STATUS_OK, STATUS_AWAITING, STATUS_LOGGING, STATUS_ERROR, STATUS_EXPIRED, STATUS_UNKNOWN,
 )
+from monitors.browser_pool import browser_pool
 from monitors.retailers import amazon as amazon_retailer
 from monitors.retailers import bestbuy as bestbuy_retailer
 from monitors.retailers import walmart as walmart_retailer
@@ -327,10 +328,23 @@ async def discord_gateway_loop():
                     "channel_name": result.get("channel_name", ""),
                     "is_new":   True,
                 }
-                app_state.discord_posts.appendleft(entry)
-                await app_state.ws.broadcast({"type": "discord_post", "data": entry})
 
-                # Ingest into deal tracker
+                # Source-deal dedup: many channels (Bobble's Bot, Moonitor,
+                # Refract) post the SAME restock multiple times within minutes.
+                # When the same retailer+product alerted in the last 10 min,
+                # silence the live feed, DM, and auto-fire so the user sees
+                # exactly one notification per real restock event.
+                # The deal tracker still ingests so sighting counts stay accurate.
+                suppress = _is_duplicate_recent_alert(entry)
+
+                if not suppress:
+                    app_state.discord_posts.appendleft(entry)
+                    await app_state.ws.broadcast({"type": "discord_post", "data": entry})
+                else:
+                    await app_state.log("info",
+                        f"Suppressed duplicate feed entry (recent: {suppress})", "discord")
+
+                # Ingest into deal tracker (always — keeps sighting counts honest)
                 tracked = deal_tracker.ingest(entry)
                 if tracked:
                     deals_changed = True
@@ -338,18 +352,7 @@ async def discord_gateway_loop():
                         "type": "tracked_deal_update",
                         "data": tracked.to_dict(),
                     })
-
-                    # Source-deal dedup: many channels (Bobble's Bot, Moonitor,
-                    # Refract) post the SAME restock multiple times in ~minutes
-                    # with slightly different titles, which the Jaccard match
-                    # treats as separate tracked deals. Suppress downstream
-                    # effects (DM + auto-fire) when the same retailer+product
-                    # was alerted in the last 10 minutes.
-                    suppress = _is_duplicate_recent_alert(entry)
-                    if suppress:
-                        await app_state.log("info",
-                            f"Skipping duplicate alert (recent: {suppress})", "discord")
-                    else:
+                    if not suppress:
                         # Phase 4 — auto-fire ATC to configured accounts
                         asyncio.create_task(_maybe_auto_fire_atc(tracked, entry))
 
@@ -361,6 +364,11 @@ async def discord_gateway_loop():
                         from web.state import _extract_product_name, _extract_retailer
                         title = _extract_product_name(entry)
                         retailer_name = _extract_retailer(entry)
+                        # Skip Best Buy DMs — Akamai-protected, manual purchases never land
+                        if retailer_name and retailer_name.lower() in ("best buy", "bestbuy"):
+                            await app_state.log("info",
+                                f"Skipped Best Buy DM (manual unwinnable): {title[:60]}", "discord")
+                            dm_user = None  # short-circuit the rest of the DM block
                         price = entry.get("price")
 
                         # Optionally find matching TCGPlayer product for price context
@@ -403,7 +411,8 @@ async def discord_gateway_loop():
                         cart_links = _extract_checkout_links(entry)
                         for cl in cart_links[:3]:
                             dm_msg += f"\n🛒 [{cl['label']}]({cl['url']})"
-                        await _discord.send_dm(dm_token, dm_user, dm_msg)
+                        if dm_user:
+                            await _discord.send_dm(dm_token, dm_user, dm_msg)
 
                 kw_str = ", ".join(result.get("matched_keywords", []))
                 price_str = f" — ${result['price']:.2f}" if result.get("price") else ""
@@ -981,6 +990,51 @@ async def lifespan(app: FastAPI):
             ok_count = sum(1 for a in accs if a.status == STATUS_OK)
             await _progress(f"{ok_count}/{len(accs)} accounts ready", 99, done=True)
 
+            # Launch persistent off-screen browsers for logged-in Amazon/Walmart
+            # accounts. Pages spawn instantly out of these for ATC; on success
+            # we move the window on-screen for manual checkout.
+            poolable = [a for a in accs
+                        if a.status == STATUS_OK and a.retailer in ("amazon", "walmart")]
+            if poolable:
+                await _progress(f"Pre-warming {len(poolable)} browser session(s)…", 99)
+                ua = _gu(stealth2)
+                ch = _gc(stealth2)
+                async def _pool_start(a):
+                    try:
+                        await browser_pool.start_for(a, ua, ch)
+                    except Exception as e:
+                        print(f"  [pool] {a.name} failed to pre-warm: {e}")
+                await asyncio.gather(*[_pool_start(a) for a in poolable])
+                await _progress(f"Pre-warmed {len(browser_pool.all_active_ids())}/{len(poolable)} browsers (off-screen)", 99, done=True)
+
+                # B) Pre-warm product tabs for watchlist items the user has
+                # auto-fire enabled on. Saves 1-3 seconds per ATC by avoiding
+                # the product-page render when a deal hits.
+                _PREWARM_TAB_CAP = 8  # per-account limit to bound memory
+                from monitors.retailers import amazon as _az, walmart as _wm
+                async def _prewarm_account_pages(acc):
+                    handle = browser_pool.get(acc.id)
+                    if not handle:
+                        return
+                    # Find watchlist entries where this account is in auto_atc_account_ids
+                    eligible = [e for e in product_hub.entries
+                                if acc.id in (e.auto_atc_account_ids or [])]
+                    eligible = eligible[:_PREWARM_TAB_CAP]
+                    for entry in eligible:
+                        rids = entry.retailer_product_ids or {}
+                        if acc.retailer == "amazon" and rids.get("amazon"):
+                            asin = rids["amazon"]
+                            await handle.pre_warm(asin, _az.url_from_asin(asin))
+                        elif acc.retailer == "walmart" and rids.get("walmart"):
+                            iid = rids["walmart"]
+                            await handle.pre_warm(iid, _wm.url_from_item_id(iid))
+                if poolable:
+                    await asyncio.gather(*[_prewarm_account_pages(a) for a in poolable])
+                    total_warmed = sum(len((browser_pool.get(a.id).warmed_pages if browser_pool.get(a.id) else {}))
+                                       for a in poolable)
+                    if total_warmed:
+                        await _progress(f"Pre-warmed {total_warmed} product tabs across accounts", 99, done=True)
+
         await app_state.ws.broadcast({"type": "startup_complete", "data": None})
         print("  [startup] Ready")
 
@@ -1004,6 +1058,9 @@ async def lifespan(app: FastAPI):
     for aid in list(_open_account_browsers.keys()):
         try: await _close_open_account_browser(aid)
         except Exception: pass
+    # Stop the persistent off-screen browser pool
+    try: await browser_pool.stop_all()
+    except Exception: pass
 
 app = FastAPI(lifespan=lifespan)
 
@@ -2617,24 +2674,42 @@ _AUTO_ATC_COOLDOWN_MIN = 30   # don't re-fire same account+ASIN within this wind
 _AUTO_ATC_DAILY_CAP    = 1    # successful ATCs per account+ASIN per UTC day
 
 
-def _atc_can_fire(account_id: str, asin: str) -> tuple[bool, str]:
-    """Check cooldown + daily cap. Returns (allowed, reason_if_not)."""
+async def _atc_can_fire(account_id: str, asin: str) -> tuple[bool, str]:
+    """Check cooldown + daily cap. Returns (allowed, reason_if_not).
+
+    Daily cap counts COMPLETED ORDERS (checkout with order_id captured),
+    not just successful ATCs — so failed checkouts don't burn the cap and
+    a deal that came back can retry.
+    """
     if not asin:
         return False, "no asin"
     now = datetime.now()
     today_str = now.strftime("%Y-%m-%d")
     cooldown_cutoff = now - timedelta(minutes=_AUTO_ATC_COOLDOWN_MIN)
-    today_success = 0
+    # In-memory cooldown tracking (rapid duplicate sightings)
     for h in _atc_fire_history:
         if h["account_id"] != account_id or h["asin"] != asin:
             continue
-        ts = h["timestamp"]
-        if ts >= cooldown_cutoff:
+        if h["timestamp"] >= cooldown_cutoff:
             return False, f"cooldown ({_AUTO_ATC_COOLDOWN_MIN} min)"
-        if h["success"] and ts.strftime("%Y-%m-%d") == today_str:
-            today_success += 1
-    if today_success >= _AUTO_ATC_DAILY_CAP:
-        return False, f"daily cap reached ({_AUTO_ATC_DAILY_CAP})"
+    # Persistent daily cap: count completed orders (order_id present) from the
+    # SQLite orders table for this account+product today
+    try:
+        import aiosqlite
+        async with aiosqlite.connect(price_db.DB_PATH) as db:
+            async with db.execute(
+                """SELECT COUNT(*) FROM orders
+                   WHERE account_id = ? AND identifier = ?
+                     AND action = 'checkout' AND success = 1
+                     AND order_id IS NOT NULL AND order_id != ''
+                     AND substr(timestamp, 1, 10) = ?""",
+                (account_id, asin, today_str),
+            ) as cur:
+                completed_today = (await cur.fetchone())[0]
+    except Exception:
+        completed_today = 0
+    if completed_today >= _AUTO_ATC_DAILY_CAP:
+        return False, f"daily cap reached ({_AUTO_ATC_DAILY_CAP} placed orders today)"
     return True, ""
 
 
@@ -2828,7 +2903,7 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                 else:
                     continue
 
-                allowed, why = _atc_can_fire(account_id, pid)
+                allowed, why = await _atc_can_fire(account_id, pid)
                 if not allowed:
                     await app_state.log("info",
                         f"[{acc.name}] auto-ATC skipped for {pid}: {why}", "accounts")
@@ -2839,22 +2914,36 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                 # sightings (multiple Discord channels reporting the same deal)
                 # race the cooldown and all fire simultaneously.
                 _atc_record_fire(account_id, pid, success=False)  # provisional
+                use_max = bool(getattr(entry, "auto_atc_use_max_quantity", False))
+                qty_label = "max" if use_max else "1"
+                pool_active = browser_pool.get(acc.id) is not None
+                pool_str = " (pool)" if pool_active else " (cold)"
                 await app_state.log("info",
-                    f"[{acc.name}] auto-ATC firing for '{entry.name}' ({acc.retailer} {pid})", "accounts")
+                    f"[{acc.name}] auto-ATC firing{pool_str} for '{entry.name}' "
+                    f"({acc.retailer} {pid}, qty={qty_label})", "accounts")
+                # Auto-fire uses keep_open=True so the persistent browser
+                # surfaces on-screen with the cart/checkout page ready for
+                # the user to click Place Your Order.
                 try:
-                    result = await mod.add_to_cart(
-                        acc, url, user_agent, browser_chan, headless=True, quantity=1)
+                    result = await _dispatch_atc(
+                        acc, url, user_agent, browser_chan,
+                        quantity=1, use_max_quantity=use_max,
+                        keep_open=True, headless=False,
+                    )
                 except Exception as e:
                     result = {"success": False, "message": f"crashed: {e}"}
                 # Update the record with the actual success state
                 if result.get("success"):
                     _atc_record_fire(account_id, pid, success=True)
 
-                # On successful Amazon ATC: immediately open a visible browser
-                # at the order-review page so the user can verify the cart total,
-                # address, and payment method, then click Place Your Order.
-                # Best Buy doesn't have a stable review-page URL flow yet.
-                if result.get("success") and acc.retailer in ("amazon", "walmart"):
+                # On successful ATC: the pool/cold ATC already navigates to the
+                # checkout page (keep_open=True) and surfaces the off-screen
+                # browser via show_window. Only spawn the secondary auto-confirm
+                # browser if the user has set a max_total cap on this watchlist
+                # item — that runs full headless checkout up to Place Your Order.
+                if (result.get("success")
+                        and acc.retailer in ("amazon", "walmart")
+                        and entry.auto_atc_max_total is not None):
                     asyncio.create_task(_review_after_auto_atc(
                         acc, pid, entry.name,
                         max_total=entry.auto_atc_max_total,
@@ -2873,6 +2962,42 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                     log.debug(f"order log failed: {ee}")
     except Exception as e:
         await app_state.log("warn", f"auto-ATC handler error: {e}", "accounts")
+
+
+async def _dispatch_atc(acc, url: str, user_agent: str, browser_chan: Optional[str],
+                         *, quantity: int = 1, use_max_quantity: bool = False,
+                         keep_open: bool = False, headless: bool = True) -> dict:
+    """Run ATC for an account. Prefers the persistent pool (fast — opens
+    a new page in the existing off-screen browser); falls back to a one-shot
+    `add_to_cart` launch when no pool handle exists for that account."""
+    mod = _RETAILER_MODULES.get(acc.retailer)
+    if not mod:
+        return {"success": False, "message": f"Retailer '{acc.retailer}' not yet implemented"}
+
+    # Pool path: only Amazon/Walmart support it; Best Buy uses persistent_context already
+    pool_handle = browser_pool.get(acc.id) if acc.retailer in ("amazon", "walmart") else None
+    if pool_handle and hasattr(mod, "add_to_cart_via_pool"):
+        try:
+            return await mod.add_to_cart_via_pool(
+                acc, url, pool_handle,
+                quantity=quantity, use_max_quantity=use_max_quantity,
+                keep_open=keep_open,
+            )
+        except Exception as e:
+            log.debug(f"pool ATC failed, falling back to one-shot: {e}")
+
+    # Fallback: cold launch via the retailer module's standard add_to_cart
+    atc_kw = {"headless": headless, "quantity": quantity,
+              "use_max_quantity": use_max_quantity, "keep_open": keep_open}
+    try:
+        return await mod.add_to_cart(acc, url, user_agent, browser_chan, **atc_kw)
+    except TypeError:
+        atc_kw.pop("keep_open", None)
+        try:
+            return await mod.add_to_cart(acc, url, user_agent, browser_chan, **atc_kw)
+        except TypeError:
+            atc_kw.pop("use_max_quantity", None)
+            return await mod.add_to_cart(acc, url, user_agent, browser_chan, **atc_kw)
 
 
 def _resolve_atc_url(body: dict, retailer: str = "amazon") -> str:
@@ -2910,6 +3035,8 @@ async def account_atc(account_id: str, body: dict):
     if not url:
         raise HTTPException(status_code=400, detail="url, asin, or sku required")
     quantity = max(1, int(body.get("quantity", 1)))
+    use_max_quantity = bool(body.get("use_max_quantity", False))
+    keep_open = bool(body.get("keep_open", False))
 
     cfg     = load_config()
     stealth = cfg.get("stealth", {}) or {}
@@ -2917,14 +3044,18 @@ async def account_atc(account_id: str, body: dict):
     user_agent   = get_user_agent(stealth)
     browser_chan = get_browser_channel(stealth)
     headless     = bool(body.get("headless", True))
+    if keep_open:
+        headless = False  # keep_open is incompatible with headless
 
-    mod = _RETAILER_MODULES.get(acc.retailer)
-    if not mod:
+    if acc.retailer not in _RETAILER_MODULES:
         raise HTTPException(status_code=400, detail=f"Retailer '{acc.retailer}' not yet implemented")
 
-    await app_state.log("info", f"[{acc.name}] ATC starting → {url[:80]}", "accounts")
-    result = await mod.add_to_cart(acc, url, user_agent, browser_chan,
-                                   headless=headless, quantity=quantity)
+    pool_used = browser_pool.get(acc.id) is not None
+    pool_str = " (pool)" if pool_used else " (cold)"
+    await app_state.log("info", f"[{acc.name}] ATC starting{pool_str} → {url[:80]}", "accounts")
+    result = await _dispatch_atc(acc, url, user_agent, browser_chan,
+                                  quantity=quantity, use_max_quantity=use_max_quantity,
+                                  keep_open=keep_open, headless=headless)
     log_level = "info" if result["success"] else "warn"
     await app_state.log(log_level,
         f"[{acc.name}] ATC: {result['message']}", "accounts")
@@ -2948,7 +3079,11 @@ async def account_atc_batch(body: dict):
     if not isinstance(ids, list) or not ids:
         raise HTTPException(status_code=400, detail="account_ids required")
     quantity = max(1, int(body.get("quantity", 1)))
+    use_max_quantity = bool(body.get("use_max_quantity", False))
+    keep_open = bool(body.get("keep_open", False))
     headless = bool(body.get("headless", True))
+    if keep_open:
+        headless = False
 
     cfg     = load_config()
     stealth = cfg.get("stealth", {}) or {}
@@ -2960,19 +3095,20 @@ async def account_atc_batch(body: dict):
         acc = account_manager.find(account_id)
         if not acc:
             return {"account_id": account_id, "name": "?", "success": False, "message": "Account not found"}
-        mod = _RETAILER_MODULES.get(acc.retailer)
-        if not mod:
+        if acc.retailer not in _RETAILER_MODULES:
             return {"account_id": account_id, "name": acc.name, "success": False,
                     "message": f"Retailer '{acc.retailer}' not yet implemented"}
-        # Resolve URL per-account so each retailer gets its appropriate identifier
         url = _resolve_atc_url(body, retailer=acc.retailer)
         if not url:
             return {"account_id": account_id, "name": acc.name, "success": False,
                     "message": "No url/asin/sku provided"}
-        await app_state.log("info", f"[{acc.name}] ATC starting → {url[:80]}", "accounts")
+        pool_used = browser_pool.get(acc.id) is not None
+        pool_str = " (pool)" if pool_used else " (cold)"
+        await app_state.log("info", f"[{acc.name}] ATC starting{pool_str} → {url[:80]}", "accounts")
         try:
-            r = await mod.add_to_cart(acc, url, user_agent, browser_chan,
-                                      headless=headless, quantity=quantity)
+            r = await _dispatch_atc(acc, url, user_agent, browser_chan,
+                                     quantity=quantity, use_max_quantity=use_max_quantity,
+                                     keep_open=keep_open, headless=headless)
         except Exception as e:
             r = {"success": False, "message": f"Crashed: {e}", "cart_count": None}
         await app_state.log("info" if r["success"] else "warn",
@@ -3186,6 +3322,32 @@ async def toggle_account_browser(account_id: str):
         "data": {"account_id": account_id, "open": True},
     })
     return {"open": True}
+
+
+@app.post("/api/accounts/{account_id}/show-pool-window")
+async def show_pool_window(account_id: str):
+    """Move the persistent off-screen browser on-screen for this account."""
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    handle = browser_pool.get(account_id)
+    if not handle:
+        raise HTTPException(status_code=400, detail="No persistent browser running for this account")
+    ok = await handle.show_window()
+    return {"shown": ok, "visible": handle.visible}
+
+
+@app.post("/api/accounts/{account_id}/hide-pool-window")
+async def hide_pool_window(account_id: str):
+    """Move the persistent browser off-screen."""
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    handle = browser_pool.get(account_id)
+    if not handle:
+        raise HTTPException(status_code=400, detail="No persistent browser running for this account")
+    ok = await handle.hide_window()
+    return {"hidden": ok, "visible": handle.visible}
 
 
 @app.post("/api/accounts/{account_id}/check")
@@ -4009,6 +4171,8 @@ async def set_hub_auto_atc_accounts(entry_id: str, body: dict):
                 entry.auto_atc_max_total = f if f > 0 else None
             except (TypeError, ValueError):
                 pass
+    if "use_max_quantity" in body:
+        entry.auto_atc_use_max_quantity = bool(body["use_max_quantity"])
     product_hub.save_to_disk()
     await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
     return entry.to_dict()

@@ -2480,6 +2480,14 @@ select.form-input option { background: var(--surface2); }
             <input type="number" class="form-input" id="atc-qty" min="1" max="10" value="1">
           </div>
         </div>
+        <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px">
+          <input type="checkbox" id="atc-max-qty">
+          <span><b>Use max quantity allowed by listing</b> — ignores Qty above; reads the listing's per-customer cap from the quantity dropdown</span>
+        </label>
+        <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px">
+          <input type="checkbox" id="atc-keep-open">
+          <span><b>Keep browser open at cart</b> — after ATC, leaves the visible browser at the cart page so you can review and click Continue to Checkout yourself. Forces visible mode.</span>
+        </label>
         <label style="font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px">
           <input type="checkbox" id="atc-headless" checked> Headless (no visible browser windows during ATC)
         </label>
@@ -5125,6 +5133,7 @@ function _hubDetailDealsHTML(entry) {
         </div>`;
       }).join('');
       const maxTotalVal = entry.auto_atc_max_total != null ? entry.auto_atc_max_total : '';
+      const useMaxQty = !!entry.auto_atc_use_max_quantity;
       accountPickerSection = `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Auto-Fire to Accounts</div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:6px">When a new sighting arrives, the app will headlessly run Add-to-Cart through each selected account. Banner still shows. Cooldown 30 min · daily cap 1 successful ATC per account per product.</div>
@@ -5138,6 +5147,11 @@ function _hubDetailDealsHTML(entry) {
             onchange="_hubSaveAutoAtcMaxTotal('${entry.id}', this.value)">
           <span style="font-size:10px;color:var(--muted)">When set, successful auto-ATC <b>auto-clicks Place Your Order</b> if the order total is at or below this cap. Leave blank to stop at the order-review page so you confirm manually.</span>
         </div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-top:8px;font-size:11px">
+          <input type="checkbox" ${useMaxQty ? 'checked' : ''}
+            onchange="_hubSaveAutoAtcUseMaxQty('${entry.id}', this.checked)">
+          <span><b>Buy max quantity allowed by listing</b> — reads the per-customer cap from the listing (e.g. "limit 4 per order") and ATCs that many at once</span>
+        </label>
       </div>`;
     } else {
       accountPickerSection = `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)">
@@ -7948,10 +7962,74 @@ function _discordExtractGame(p) {
 }
 
 function _discordExtractTitle(p) {
+  // Generic embed titles from common bots — when present, dig into fields for
+  // the actual product name. Refract: "New Checkout". Bobble: "Deal Alert".
+  // Moonitor: often "Item Restocked" or just retailer name.
+  const GENERIC_TITLES = /^(new\s*checkout|item\s*restocked|deal\s*alert|restock\s*alert|item\s*available|new\s*deal|in\s*stock)$/i;
+
+  // Helper: pull product text out of a field value, stripping markdown link
+  // syntax like "[Product Name](https://...)" → "Product Name"
+  const cleanFieldValue = (v) => {
+    if (!v) return '';
+    let s = String(v).trim();
+    // First markdown link: [text](url)
+    const md = s.match(/^\[([^\]]+)\]\(/);
+    if (md) return md[1].trim();
+    // Strip leading ```code``` wrappers
+    s = s.replace(/^```\s*/, '').replace(/\s*```$/, '');
+    // Strip leading/trailing backticks
+    s = s.replace(/^`+|`+$/g, '');
+    return s.split('\n')[0].slice(0, 200);
+  };
+
+  // Search embed fields for a product-like field. Order matters: prefer
+  // explicit "Product" fields, then "Item", then "Name", then "Title".
+  const findProductField = (fields) => {
+    if (!fields) return '';
+    const keys = Array.isArray(fields) ? fields.map(f => f.name) : Object.keys(fields);
+    const priority = ['Product', 'Item', 'Name', 'Title', 'product', 'item', 'name', 'title'];
+    for (const want of priority) {
+      const idx = keys.findIndex(k => (k || '').toLowerCase() === want.toLowerCase());
+      if (idx === -1) continue;
+      const value = Array.isArray(fields) ? fields[idx].value : fields[want] || fields[want.toLowerCase()];
+      const cleaned = cleanFieldValue(value);
+      if (cleaned) return cleaned;
+    }
+    return '';
+  };
+
+  // Live posts: p.embeds = [{title, fields, ...}]
   for (const e of (p.embeds || [])) {
-    if (e.title) return e.title;
+    const t = (e.title || '').trim();
+    if (t && !GENERIC_TITLES.test(t)) return t;
+    // Title is generic — look for product in fields
+    const productName = findProductField(e.fields);
+    if (productName) return productName;
   }
-  return (p.content || '').split('\n')[0].slice(0, 80);
+
+  // Audit-log rows: p.embed_title (string), p.embed_fields (string of "Name: Value\n...")
+  if (p.embed_title || p.embed_fields) {
+    const t = (p.embed_title || '').trim();
+    if (t && !GENERIC_TITLES.test(t)) return t;
+    const fields = p.embed_fields || '';
+    // Parse "Name: Value" lines into a dict
+    const parsed = {};
+    for (const line of fields.split('\n')) {
+      const idx = line.indexOf(':');
+      if (idx > 0) {
+        const k = line.slice(0, idx).trim();
+        const v = line.slice(idx + 1).trim();
+        if (k) parsed[k] = v;
+      }
+    }
+    const productName = findProductField(parsed);
+    if (productName) return productName;
+    // Fall back to whatever title we did have
+    if (t) return t;
+  }
+
+  // Last resort: first non-empty content line
+  return (p.content || '').split('\n').find(l => l.trim()) || '(no content)';
 }
 
 function _discordExtractUrl(p) {
@@ -9344,6 +9422,14 @@ async function _hubSaveAutoAtcMaxTotal(entryId, value) {
   });
 }
 
+async function _hubSaveAutoAtcUseMaxQty(entryId, useMax) {
+  await fetch(`/api/product-hub/${entryId}/auto-atc-accounts`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({use_max_quantity: !!useMax}),
+  });
+}
+
 // ── ATC Picker (manual checkout phase 2) ───────────────────────────
 let _atcContext = null;  // {label, url, asin, defaultQty}
 
@@ -9361,7 +9447,19 @@ function _renderAtcPicker() {
     ctx.label ? `Sending: <b>${esc(ctx.label)}</b>` : '';
   document.getElementById('atc-url').value = ctx.url || ctx.asin || ctx.sku || ctx.item_id || '';
   document.getElementById('atc-qty').value = ctx.defaultQty || 1;
-  document.getElementById('atc-headless').checked = true;
+  document.getElementById('atc-max-qty').checked = false;
+  // For Amazon, default to leaving the browser open so you can manually checkout.
+  // Other retailers don't have a stable "stop at cart" page yet.
+  const isAmazon = (ctx.retailer || '').toLowerCase() === 'amazon';
+  document.getElementById('atc-keep-open').checked = isAmazon;
+  document.getElementById('atc-headless').checked = !isAmazon;
+  // Toggle: keep-open and headless are mutually exclusive
+  document.getElementById('atc-keep-open').onchange = (e) => {
+    if (e.target.checked) document.getElementById('atc-headless').checked = false;
+  };
+  document.getElementById('atc-headless').onchange = (e) => {
+    if (e.target.checked) document.getElementById('atc-keep-open').checked = false;
+  };
   document.getElementById('atc-checkout').checked = false;
   document.getElementById('atc-auto-confirm').checked = false;
   document.getElementById('atc-max-total').value = '';
@@ -9412,7 +9510,9 @@ function closeAtcPickerModal() {
 async function runAtcPicker() {
   const url = document.getElementById('atc-url').value.trim();
   const qty = parseInt(document.getElementById('atc-qty').value) || 1;
-  const headless = document.getElementById('atc-headless').checked;
+  const useMaxQty = document.getElementById('atc-max-qty').checked;
+  const keepOpen  = document.getElementById('atc-keep-open').checked;
+  const headless  = !keepOpen && document.getElementById('atc-headless').checked;
   const doCheckout  = document.getElementById('atc-checkout').checked;
   const autoConfirm = document.getElementById('atc-auto-confirm').checked;
   const maxTotalRaw = document.getElementById('atc-max-total').value.trim();
@@ -9432,7 +9532,8 @@ async function runAtcPicker() {
   const isSku     = /^\d{6,8}$/.test(url);
   const isItemId  = /^\d{9,12}$/.test(url);
   const isHttpUrl = /^https?:\/\//i.test(url);
-  const body = {account_ids: ids, quantity: qty, headless};
+  const body = {account_ids: ids, quantity: qty, headless,
+                use_max_quantity: useMaxQty, keep_open: keepOpen};
   if (isHttpUrl)        body.url     = url;
   else if (isAsin)      body.asin    = url;
   else if (isItemId)    body.item_id = url;

@@ -173,9 +173,16 @@ async def add_to_cart(account: Account,
                       user_agent: str,
                       browser_channel: Optional[str],
                       headless: bool = True,
-                      quantity: int = 1) -> dict:
+                      quantity: int = 1,
+                      use_max_quantity: bool = False) -> dict:
     """Navigate to a Walmart product and click Add to Cart. Verifies the cart
-    count changed or 'Added to cart' confirmation appeared."""
+    count changed or 'Added to cart' confirmation appeared.
+
+    use_max_quantity: when True, click the qty stepper's "+" up to the max
+                      allowed by the listing before clicking Add to Cart.
+                      Walmart caps each stepper individually; the stepper's
+                      max-attribute typically reflects the per-customer cap.
+    """
     try:
         from patchright.async_api import async_playwright
     except ImportError:
@@ -208,6 +215,40 @@ async def add_to_cart(account: Account,
 
             if "/account/login" in page.url:
                 return {"success": False, "message": "Session expired — re-login this account", "cart_count": None}
+
+            # Determine target quantity. For max-quantity, read the stepper's
+            # max attribute (Walmart caps per-customer via the input's max).
+            target_qty = quantity
+            if use_max_quantity:
+                try:
+                    max_qty = await page.evaluate(r"""() => {
+                        const inp = document.querySelector(
+                            'input[data-automation-id="quantity-stepper-input"], '+
+                            'input[aria-label*="Quantity"], '+
+                            'input[type="number"][max]'
+                        );
+                        if (!inp) return null;
+                        const m = parseInt(inp.getAttribute('max'), 10);
+                        return Number.isFinite(m) && m > 0 ? m : null;
+                    }""")
+                    if isinstance(max_qty, int) and max_qty > 0:
+                        target_qty = max_qty
+                except Exception:
+                    pass
+            # Click the "+" stepper to reach target_qty (Walmart's stepper
+            # doesn't accept direct typing reliably)
+            if target_qty > 1:
+                for _ in range(target_qty - 1):
+                    try:
+                        plus = page.locator(
+                            "button[aria-label*='Increase quantity'], "
+                            "button[data-automation-id='quantity-stepper-plus']"
+                        ).first
+                        await plus.wait_for(state="visible", timeout=2000)
+                        await plus.click()
+                        await asyncio.sleep(0.2)
+                    except Exception:
+                        break
 
             # Walmart's ATC button has many variants depending on product type
             # (regular, freshness-guaranteed, marketplace, multi-pack, etc.)
@@ -284,9 +325,12 @@ async def add_to_cart(account: Account,
                 pass
 
             if success:
+                qty_str = f" qty={target_qty}" if target_qty > 1 else ""
+                cart_str = f" (cart={cart_count})" if cart_count is not None else ""
                 return {"success": True,
-                        "message": "Added to cart" + (f" (cart={cart_count})" if cart_count is not None else ""),
-                        "cart_count": cart_count}
+                        "message": f"Added to cart{qty_str}{cart_str}",
+                        "cart_count": cart_count,
+                        "quantity_added": target_qty}
             return {"success": False,
                     "message": "Click registered but no cart confirmation — possibly OOS, blocked, or popup",
                     "cart_count": cart_count}

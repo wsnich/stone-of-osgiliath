@@ -483,6 +483,7 @@ class ProductEntry:
     confirmed_retailer_ids: list[str] = field(default_factory=list)  # retailer keys the user has locked/confirmed
     auto_atc_account_ids: list[str] = field(default_factory=list)  # account IDs to auto-fire ATC when this item gets a new deal sighting
     auto_atc_max_total: Optional[float] = None  # if set, auto-confirm checkout when total <= this; if None, stop at review page
+    auto_atc_use_max_quantity: bool = False  # if True, ATC at the max quantity the listing allows (per-customer cap)
 
     def to_dict(self) -> dict:
         d = {
@@ -499,6 +500,7 @@ class ProductEntry:
             "confirmed_retailer_ids": self.confirmed_retailer_ids,
             "auto_atc_account_ids": self.auto_atc_account_ids,
             "auto_atc_max_total": self.auto_atc_max_total,
+            "auto_atc_use_max_quantity": self.auto_atc_use_max_quantity,
         }
         return d
 
@@ -522,6 +524,7 @@ class ProductEntry:
             confirmed_retailer_ids=d.get("confirmed_retailer_ids", []),
             auto_atc_account_ids=d.get("auto_atc_account_ids", []),
             auto_atc_max_total=max_total,
+            auto_atc_use_max_quantity=bool(d.get("auto_atc_use_max_quantity", False)),
         )
 
 
