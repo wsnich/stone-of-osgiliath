@@ -1042,11 +1042,32 @@ async def lifespan(app: FastAPI):
         print("  [startup] Ready")
 
     asyncio.create_task(_post_start_tasks())
+
+    async def _warmed_tab_refresher():
+        """Periodically reload pre-warmed product tabs so Amazon/Walmart
+        idle-detectors don't reap them. Refresh every 25 min — well below
+        Amazon's typical idle threshold and well above the cost of a goto."""
+        await asyncio.sleep(25 * 60)
+        while app_state.monitor_running:
+            try:
+                results = await browser_pool.refresh_all_warmed_tabs()
+                total = sum(results.values())
+                if total:
+                    log.info(f"warmed-tab refresh: {total} tabs reloaded across {len(results)} accounts")
+            except Exception as e:
+                log.warning(f"warmed-tab refresh failed: {e}")
+            await asyncio.sleep(25 * 60)
+    _warmed_tab_task = asyncio.create_task(_warmed_tab_refresher())
+
     yield
     app_state.save_to_disk()
     deal_tracker.save_to_disk()
     product_hub.save_to_disk()
     app_state.monitor_running = False
+    _warmed_tab_task.cancel()
+    try: await _warmed_tab_task
+    except asyncio.CancelledError: pass
+    except Exception: pass
     tasks_to_cancel = [t for t in (app_state._monitor_task, reddit_task, discord_task, research_task, app_state._bandwidth_task) if t]
     for t in tasks_to_cancel:
         t.cancel()

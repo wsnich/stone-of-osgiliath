@@ -57,6 +57,10 @@ class PersistentBrowser:
         # When a deal hits, we can grab an already-loaded page instead of
         # paying the navigation cost again.
         self.warmed_pages: dict[str, "Page"] = {}
+        # Stored URL per identifier so the periodic refresher knows where
+        # to re-navigate when Amazon idle-kills a tab. Survives even if
+        # the Page object dies.
+        self.warmed_urls: dict[str, str] = {}
 
     async def start(self, account: Account, user_agent: str,
                     browser_channel: Optional[str]) -> bool:
@@ -122,6 +126,7 @@ class PersistentBrowser:
         Identifier should be the retailer-specific ID (ASIN/SKU/Item#)."""
         if not self.ctx:
             return False
+        self.warmed_urls[identifier] = url
         # Already warmed? Reuse.
         existing = self.warmed_pages.get(identifier)
         if existing is not None:
@@ -142,6 +147,56 @@ class PersistentBrowser:
             return True
         except Exception:
             return False
+
+    async def refresh_warmed_tabs(self) -> int:
+        """Reload (or re-open) every warmed tab so Amazon's idle timeout
+        doesn't reap them. Returns count of tabs successfully refreshed.
+
+        Acquires the pool lock so this won't race an in-flight ATC.
+        """
+        if not self.ctx or not self.warmed_urls:
+            return 0
+        async with self.lock:
+            refreshed = 0
+            for ident, url in list(self.warmed_urls.items()):
+                page = self.warmed_pages.get(ident)
+                # Page dead or never opened — open a fresh tab
+                page_alive = False
+                if page is not None:
+                    try:
+                        _ = page.url
+                        page_alive = True
+                    except Exception:
+                        page_alive = False
+                if not page_alive:
+                    try: await page.close()  # best-effort
+                    except Exception: pass
+                    self.warmed_pages.pop(ident, None)
+                    try:
+                        page = await self.ctx.new_page()
+                        await page.goto(url, timeout=20000, wait_until="commit")
+                        self.warmed_pages[ident] = page
+                        refreshed += 1
+                        continue
+                    except Exception:
+                        continue
+                # Page alive — re-navigate to refresh the session
+                try:
+                    await page.goto(url, timeout=20000, wait_until="commit")
+                    refreshed += 1
+                except Exception:
+                    # Re-navigation failed; drop and replace
+                    try: await page.close()
+                    except Exception: pass
+                    self.warmed_pages.pop(ident, None)
+                    try:
+                        new_page = await self.ctx.new_page()
+                        await new_page.goto(url, timeout=20000, wait_until="commit")
+                        self.warmed_pages[ident] = new_page
+                        refreshed += 1
+                    except Exception:
+                        pass
+            return refreshed
 
     def get_warmed_page(self, identifier: str):
         """Pop and return a pre-warmed page for this identifier, or None."""
@@ -260,6 +315,20 @@ class BrowserPool:
 
     def all_active_ids(self) -> list[str]:
         return [aid for aid, h in self._handles.items() if h.is_alive()]
+
+    async def refresh_all_warmed_tabs(self) -> dict[str, int]:
+        """Reload warmed tabs across every active handle. Returns
+        {account_id: refreshed_count} for logging."""
+        results: dict[str, int] = {}
+        for aid, h in list(self._handles.items()):
+            if not h.is_alive():
+                continue
+            try:
+                results[aid] = await h.refresh_warmed_tabs()
+            except Exception as e:
+                log.debug(f"[{aid}] refresh_warmed_tabs failed: {e}")
+                results[aid] = 0
+        return results
 
 
 # Module-level singleton — same pattern as account_manager
