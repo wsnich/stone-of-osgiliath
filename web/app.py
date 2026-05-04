@@ -9,11 +9,14 @@ Monitor loop uses a per-product scheduler:
 
 import asyncio
 import json
+import logging
 import os
 import random
 import re
 import sys
 import webbrowser
+
+log = logging.getLogger("app")
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -2984,7 +2987,13 @@ async def _dispatch_atc(acc, url: str, user_agent: str, browser_chan: Optional[s
                 keep_open=keep_open,
             )
         except Exception as e:
-            log.debug(f"pool ATC failed, falling back to one-shot: {e}")
+            log.warning(f"pool ATC failed for {acc.name}, falling back to one-shot: {e}")
+            try:
+                await app_state.log("warn",
+                    f"[{acc.name}] pool ATC raised — falling back to cold launch: {e}",
+                    "accounts")
+            except Exception:
+                pass
 
     # Fallback: cold launch via the retailer module's standard add_to_cart
     atc_kw = {"headless": headless, "quantity": quantity,
