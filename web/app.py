@@ -2987,26 +2987,38 @@ async def _dispatch_atc(acc, url: str, user_agent: str, browser_chan: Optional[s
                 keep_open=keep_open,
             )
         except Exception as e:
-            log.warning(f"pool ATC failed for {acc.name}, falling back to one-shot: {e}")
+            log.warning(f"pool ATC failed for {acc.name}: {e}")
             try:
                 await app_state.log("warn",
-                    f"[{acc.name}] pool ATC raised — falling back to cold launch: {e}",
-                    "accounts")
+                    f"[{acc.name}] pool ATC raised: {e}", "accounts")
             except Exception:
                 pass
+            # The pool browser is the user's expected surface. When pool
+            # raises with keep_open requested, opening a fresh visible
+            # window competes with the off-screen pool — surface the error
+            # instead and let them retry manually.
+            if keep_open:
+                return {"success": False,
+                        "message": f"Pool ATC failed (browser left off-screen, no new window opened): {e}"}
 
     # Fallback: cold launch via the retailer module's standard add_to_cart
     atc_kw = {"headless": headless, "quantity": quantity,
               "use_max_quantity": use_max_quantity, "keep_open": keep_open}
-    try:
-        return await mod.add_to_cart(acc, url, user_agent, browser_chan, **atc_kw)
-    except TypeError:
-        atc_kw.pop("keep_open", None)
+    async def _cold_call(kw):
         try:
-            return await mod.add_to_cart(acc, url, user_agent, browser_chan, **atc_kw)
+            return await mod.add_to_cart(acc, url, user_agent, browser_chan, **kw)
         except TypeError:
-            atc_kw.pop("use_max_quantity", None)
-            return await mod.add_to_cart(acc, url, user_agent, browser_chan, **atc_kw)
+            kw.pop("keep_open", None)
+            try:
+                return await mod.add_to_cart(acc, url, user_agent, browser_chan, **kw)
+            except TypeError:
+                kw.pop("use_max_quantity", None)
+                return await mod.add_to_cart(acc, url, user_agent, browser_chan, **kw)
+    try:
+        return await _cold_call(atc_kw)
+    except Exception as e:
+        log.warning(f"cold-launch ATC crashed for {acc.name}: {e}")
+        return {"success": False, "message": f"Cold-launch ATC crashed: {e}"}
 
 
 def _resolve_atc_url(body: dict, retailer: str = "amazon") -> str:

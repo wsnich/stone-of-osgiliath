@@ -485,43 +485,63 @@ async def add_to_cart_via_pool(account: Account, url: str,
       1. Try to grab a pre-warmed product tab for this ASIN (no navigation cost)
       2. Otherwise open a fresh page (still fast — no browser launch)
       3. Inside _atc_on_page, the URL-based ATC is tried first
+
+    On a transient page death (Amazon idle-kills the warmed tab), we open a
+    fresh page in the same pool context and retry once before giving up.
     """
     asin_match = re.search(r'/dp/([A-Z0-9]{10})', url)
     asin = asin_match.group(1) if asin_match else None
 
+    async def _run_atc(page, used_warmed: bool) -> dict:
+        result = await _atc_on_page(page, url, quantity=quantity,
+                                    use_max_quantity=use_max_quantity,
+                                    keep_open=keep_open)
+        if used_warmed and isinstance(result, dict):
+            result["warmed_tab_used"] = True
+
+        if keep_open and result.get("success"):
+            try: await pool_handle.show_window()
+            except Exception: pass
+            if asin:
+                asyncio.create_task(pool_handle.pre_warm(asin, url_from_asin(asin)))
+            return result
+        try: await page.close()
+        except Exception: pass
+        if used_warmed and asin:
+            asyncio.create_task(pool_handle.pre_warm(asin, url_from_asin(asin)))
+        return result
+
+    def _is_dead_target(err: Exception) -> bool:
+        s = str(err).lower()
+        return ("target page" in s and "closed" in s) or "browser has been closed" in s
+
     async with pool_handle.lock:
-        # B) Pre-warmed tab path
+        # First attempt — prefer the warmed tab
         page = pool_handle.get_warmed_page(asin) if asin else None
         used_warmed = page is not None
         if page is None:
             page = await pool_handle.get_page()
         if not page:
             return {"success": False, "message": "Could not open page in persistent context"}
-        try:
-            result = await _atc_on_page(page, url, quantity=quantity,
-                                        use_max_quantity=use_max_quantity,
-                                        keep_open=keep_open)
-            if used_warmed and isinstance(result, dict):
-                result["warmed_tab_used"] = True
 
-            # On keep_open success: leave page open AND surface the window
-            if keep_open and result.get("success"):
-                try: await pool_handle.show_window()
-                except Exception: pass
-                # Re-pre-warm a fresh tab in the background so the next deal
-                # for this ASIN still benefits from B
-                if asin:
-                    asyncio.create_task(pool_handle.pre_warm(asin, url_from_asin(asin)))
-                return result
-            # Close the page; re-pre-warm a fresh tab if this was a warmed tab
-            try: await page.close()
-            except Exception: pass
-            if used_warmed and asin:
-                asyncio.create_task(pool_handle.pre_warm(asin, url_from_asin(asin)))
-            return result
+        try:
+            return await _run_atc(page, used_warmed)
         except Exception as e:
             try: await page.close()
             except Exception: pass
+            # Retry once with a fresh page if the warmed tab died but the
+            # pool's context is still alive. Keeps the user's persistent
+            # browser surfaced instead of falling out to a fresh window.
+            if used_warmed and _is_dead_target(e) and pool_handle.is_alive():
+                fresh = await pool_handle.get_page()
+                if fresh:
+                    try:
+                        return await _run_atc(fresh, used_warmed=False)
+                    except Exception as e2:
+                        try: await fresh.close()
+                        except Exception: pass
+                        return {"success": False,
+                                "message": f"Pool ATC crashed after retry: {e2}"}
             return {"success": False, "message": f"Pool ATC crashed: {e}"}
 
 
