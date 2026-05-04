@@ -209,36 +209,58 @@ class PersistentBrowser:
         except Exception:
             return None
 
-    async def _send_cdp_window_bounds(self, x: int, y: int) -> bool:
-        """Move the browser window via Chrome DevTools Protocol."""
+    async def _send_cdp_window_bounds(self, x: int, y: int,
+                                       *, force_visible: bool = False) -> bool:
+        """Move the browser window via Chrome DevTools Protocol.
+
+        force_visible: on Windows, a window at extreme negative coords can
+        end up in a state where setWindowBounds with state=normal is a no-op.
+        Cycling through minimized → normal forces a real state transition
+        that brings the window onscreen.
+        """
         if not self.ctx:
             return False
         try:
-            # Need a page to attach the CDP session to
             pages = self.ctx.pages
             page = pages[0] if pages else await self.ctx.new_page()
             cdp = await self.ctx.new_cdp_session(page)
             target = await cdp.send("Browser.getWindowForTarget")
             window_id = target.get("windowId")
             if window_id is None:
+                log.warning("CDP move: getWindowForTarget returned no windowId")
                 return False
+            if force_visible:
+                # State transition trick: minimize first, then set bounds normal.
+                try:
+                    await cdp.send("Browser.setWindowBounds", {
+                        "windowId": window_id,
+                        "bounds": {"windowState": "minimized"},
+                    })
+                except Exception:
+                    pass
             await cdp.send("Browser.setWindowBounds", {
                 "windowId": window_id,
                 "bounds": {"left": x, "top": y,
                            "width": _WINDOW_WIDTH, "height": _WINDOW_HEIGHT,
                            "windowState": "normal"},
             })
+            if force_visible:
+                # Pull the page tab to foreground so it gets focus
+                try: await page.bring_to_front()
+                except Exception: pass
             try: await cdp.detach()
             except Exception: pass
             return True
         except Exception as e:
-            log.debug(f"CDP move failed: {e}")
+            log.warning(f"CDP move ({x},{y}) failed: {e}")
             return False
 
     async def show_window(self) -> bool:
-        ok = await self._send_cdp_window_bounds(_ONSCREEN_X, _ONSCREEN_Y)
+        ok = await self._send_cdp_window_bounds(_ONSCREEN_X, _ONSCREEN_Y, force_visible=True)
         if ok:
             self.visible = True
+        else:
+            log.warning(f"[{self.account_id}] show_window: CDP did not surface — window may stay off-screen")
         return ok
 
     async def hide_window(self) -> bool:

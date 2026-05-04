@@ -493,6 +493,18 @@ async def add_to_cart_via_pool(account: Account, url: str,
     asin_match = re.search(r'/dp/([A-Z0-9]{10})', url)
     asin = asin_match.group(1) if asin_match else None
 
+    def _needs_human(result: dict) -> bool:
+        """User-actionable failures the persistent browser must surface so the
+        user can fix the state (re-login, solve CAPTCHA, pick a variation)."""
+        if result.get("success"):
+            return False
+        msg = (result.get("message") or "").lower()
+        return any(s in msg for s in (
+            "session expired", "re-login",
+            "captcha", "robot",
+            "variation", "size picker",
+        ))
+
     async def _run_atc(page, used_warmed: bool) -> dict:
         result = await _atc_on_page(page, url, quantity=quantity,
                                     use_max_quantity=use_max_quantity,
@@ -500,11 +512,22 @@ async def add_to_cart_via_pool(account: Account, url: str,
         if used_warmed and isinstance(result, dict):
             result["warmed_tab_used"] = True
 
-        if keep_open and result.get("success"):
-            try: await pool_handle.show_window()
-            except Exception: pass
+        # Success on keep_open OR user-actionable failure: leave page open AND
+        # surface the off-screen window so the user can intervene.
+        if keep_open and (result.get("success") or _needs_human(result)):
+            shown = False
+            try:
+                shown = await pool_handle.show_window()
+            except Exception as _ex:
+                log.warning(f"show_window raised: {_ex}")
             if asin:
                 asyncio.create_task(pool_handle.pre_warm(asin, url_from_asin(asin)))
+            result.setdefault("browser_left_open", True)
+            result["window_surfaced"] = shown
+            if not shown:
+                # Be loud — the user expects to see the window
+                base = result.get("message", "")
+                result["message"] = f"{base} ⚠ pool window did NOT surface (CDP move failed — window still off-screen)".strip()
             return result
         try: await page.close()
         except Exception: pass
