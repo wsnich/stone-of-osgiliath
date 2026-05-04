@@ -38,6 +38,9 @@ _WINDOW_WIDTH, _WINDOW_HEIGHT = 1280, 900
 _BROWSER_ARGS_BASE = [
     "--password-store=basic",
     "--disable-save-password-bubble",
+    # Suppress Windows Hello PIN prompts during retailer sign-in. Targeted set
+    # — broader --disable-features values are detectable by anti-bot fingerprinters.
+    "--disable-features=WebAuthenticationConditionalUI,PasswordManagerOnboarding,PasswordCheck",
     f"--window-position={_OFFSCREEN_X},{_OFFSCREEN_Y}",
     f"--window-size={_WINDOW_WIDTH},{_WINDOW_HEIGHT}",
 ]

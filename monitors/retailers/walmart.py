@@ -34,6 +34,10 @@ CART_URL  = "https://www.walmart.com/cart"
 _BROWSER_ARGS = [
     "--password-store=basic",
     "--disable-save-password-bubble",
+    # Disable the WebAuthn conditional-UI / passkey path that triggers Windows
+    # Hello PIN prompts on sign-in forms. Targeted set — broader --disable-features
+    # values are detectable by anti-bot fingerprinters.
+    "--disable-features=WebAuthenticationConditionalUI,PasswordManagerOnboarding,PasswordCheck",
 ]
 
 

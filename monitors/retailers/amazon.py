@@ -30,11 +30,16 @@ LOGIN_URL = "https://www.amazon.com/ap/signin?_encoding=UTF8&openid.return_to=ht
 HOME_URL  = "https://www.amazon.com/?language=en_US"
 
 # Chromium flags that prevent Windows Hello / Credential Manager from hijacking
-# password / autofill flows during login. Kept minimal so we don't fingerprint
-# as a bot (extra --disable-features flags can be detected by anti-bot systems).
+# password / autofill flows during login. Kept tight so we don't fingerprint as
+# a bot — only the Windows-PIN-triggering features are disabled.
+#   WebAuthenticationConditionalUI: passkey conditional UI on sign-in forms.
+#     This is what pops Windows Hello when Amazon's email field renders.
+#   PasswordManagerOnboarding: the "Save password?" overlay first-run prompt.
+#   PasswordCheck: phones home to scan for breached creds, also UI-noisy.
 _BROWSER_ARGS = [
     "--password-store=basic",
     "--disable-save-password-bubble",
+    "--disable-features=WebAuthenticationConditionalUI,PasswordManagerOnboarding,PasswordCheck",
 ]
 
 
