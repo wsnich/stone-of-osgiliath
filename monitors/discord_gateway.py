@@ -790,12 +790,31 @@ class DiscordGatewayMonitor:
     async def check_health(self) -> bool:
         if not self._running or not self._browser:
             return False
-        # Only check if browser is still alive — don't restart based on
-        # message activity since deal channels can be quiet for hours
         try:
             _ = self._page.url  # throws if browser crashed
         except Exception:
             return False
+        # Starvation detector: if we've EVER received a message but haven't
+        # received one in 10+ minutes AND the click bot has been firing
+        # recently (channels keep showing "jump to present" bars but events
+        # aren't reaching our DOM scan), the page state is hung and a restart
+        # is the only way out. Common after Discord auto-reloads its app.
+        STARVATION_SEC = 600
+        if self._last_ws_activity > 0:
+            idle = time.time() - self._last_ws_activity
+            if idle > STARVATION_SEC:
+                # Check if any channel is still showing "jump to present" bars
+                stale_clicks = 0
+                for ch_id in (self._channel_pages or {}).keys():
+                    last_per_ch = getattr(self, f"_last_msg_{ch_id}", 0)
+                    if last_per_ch > self._last_ws_activity - 30:
+                        # The click bot has been resetting this channel's timer
+                        # (i.e., it's been clicking but receiving nothing)
+                        stale_clicks += 1
+                if stale_clicks >= 1:
+                    print(f"  [Discord GW] STARVATION: {idle/60:.1f} min since last message "
+                          f"despite {stale_clicks} channel(s) showing new-message bars — restart needed")
+                    return False
         return True
 
     async def restart(self, config: dict, stealth_cfg: dict | None = None) -> bool:

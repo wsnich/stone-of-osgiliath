@@ -194,13 +194,16 @@ class DiscordMonitor:
 
     @staticmethod
     def _extract_price(text: str) -> Optional[float]:
-        """Extract the first dollar amount from message text."""
-        m = re.search(r'\$\s*([\d,]+\.?\d*)', text)
-        if m:
+        """Extract the first non-zero dollar amount from message text. Skips
+        $0 and $0.00 placeholders that show up in Moonitor pre-order embeds
+        (e.g. 'Save $0.00', '$0 shipping') — those aren't real product prices."""
+        for m in re.finditer(r'\$\s*([\d,]+(?:\.\d{1,2})?)', text):
             try:
-                return float(m.group(1).replace(",", ""))
+                v = float(m.group(1).replace(",", ""))
             except ValueError:
-                pass
+                continue
+            if v > 0:
+                return v
         return None
 
     @staticmethod

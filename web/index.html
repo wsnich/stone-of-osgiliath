@@ -2159,7 +2159,7 @@ select.form-input option { background: var(--surface2); }
       <button class="reddit-expand-btn" onclick="toggleDiscordOptions()" id="discord-opts-toggle" style="font-size:10px">Options</button>
       <button id="discord-collapse-btn" class="reddit-expand-btn" onclick="toggleDiscordCollapse()">Hide</button>
     </div>
-    <div class="reddit-list" id="discord-list" style="display:none"></div>
+    <div class="reddit-list" id="discord-list"></div>
     <div id="discord-channels-section" style="display:none;padding:6px 16px 8px;border-bottom:1px solid var(--border)">
       <div style="font-size:9px;color:var(--muted);margin-bottom:4px">CHANNELS:</div>
       <div id="discord-channels-list" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"></div>
@@ -2421,8 +2421,8 @@ select.form-input option { background: var(--surface2); }
             <label class="form-label">Retailer</label>
             <select class="form-input" id="acc-retailer">
               <option value="amazon">Amazon</option>
+              <option value="walmart">Walmart</option>
               <option value="bestbuy">Best Buy</option>
-              <option value="walmart" disabled>Walmart (coming soon)</option>
               <option value="target" disabled>Target (coming soon)</option>
             </select>
           </div>
@@ -4902,7 +4902,8 @@ function _hubDetailTrendsHTML(entry, p) {
 
   const pricePct = trend.price_trend;
   const supplyPct = trend.listings_trend;
-  const avg7d = trend.avg_7d;
+  // Backend exposes the 7-day rolling market-price average as `price_7d`.
+  const avg7d = trend.price_7d;
 
   const priceBadge = (() => {
     if (pricePct == null) return '<span style="color:var(--muted)">No data</span>';
@@ -4964,6 +4965,12 @@ let _hubTrendChart = null;
 
 async function _hubDetailTrendsInit(entry, p) {
   if (!p || entry.tcgplayer_index == null) return;
+  // Refresh the trends cache so price/supply badges are up-to-date.
+  // If the cache update changes the values for this entry, re-render.
+  const before = JSON.stringify(_tcgTrends[entry.tcgplayer_index] || {});
+  await loadTcgTrends();
+  const after = JSON.stringify(_tcgTrends[entry.tcgplayer_index] || {});
+  if (before !== after) _renderHubDetailContent();
   await loadHubTrendChart(entry.tcgplayer_index, 30);
 }
 
@@ -5084,7 +5091,7 @@ function _hubDetailDealsHTML(entry) {
       : '';
     // Account picker — fire automated ATC across logged-in accounts when a deal hits
     const eligibleAccounts = (accounts || []).filter(a =>
-      ['amazon', 'bestbuy'].includes(a.retailer) && a.enabled !== false);
+      ['amazon', 'walmart', 'bestbuy'].includes(a.retailer) && a.enabled !== false);
     const linkedAccountIds = new Set(entry.auto_atc_account_ids || []);
     const ridMap = entry.retailer_product_ids || {};
     let accountPickerSection = '';
@@ -5094,7 +5101,7 @@ function _hubDetailDealsHTML(entry) {
       for (const a of eligibleAccounts) {
         (byRetailer[a.retailer] = byRetailer[a.retailer] || []).push(a);
       }
-      const retailerLabels = {amazon: 'Amazon (ASIN)', bestbuy: 'Best Buy (SKU)'};
+      const retailerLabels = {amazon: 'Amazon (ASIN)', walmart: 'Walmart (Item #)', bestbuy: 'Best Buy (SKU)'};
       const sections = Object.entries(byRetailer).map(([retailer, list]) => {
         const idSet = !!ridMap[retailer];
         const idWarning = !idSet
@@ -5117,10 +5124,20 @@ function _hubDetailDealsHTML(entry) {
           ${rows}${idWarning}
         </div>`;
       }).join('');
+      const maxTotalVal = entry.auto_atc_max_total != null ? entry.auto_atc_max_total : '';
       accountPickerSection = `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Auto-Fire to Accounts</div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:6px">When a new sighting arrives, the app will headlessly run Add-to-Cart through each selected account. Banner still shows. Cooldown 30 min · daily cap 1 successful ATC per account per product.</div>
         ${sections}
+        <div style="display:grid;grid-template-columns:160px 120px 1fr;gap:8px;align-items:center;margin-top:10px;padding-top:8px;border-top:1px dashed var(--border)">
+          <label style="font-size:11px;font-weight:600">Auto-confirm max total ($):</label>
+          <input type="number" id="hub-auto-max-${entry.id}" class="form-input"
+            min="0" step="0.01" value="${esc(String(maxTotalVal))}"
+            placeholder="(blank = manual review)"
+            style="font-size:11px;padding:4px 6px"
+            onchange="_hubSaveAutoAtcMaxTotal('${entry.id}', this.value)">
+          <span style="font-size:10px;color:var(--muted)">When set, successful auto-ATC <b>auto-clicks Place Your Order</b> if the order total is at or below this cap. Leave blank to stop at the order-review page so you confirm manually.</span>
+        </div>
       </div>`;
     } else {
       accountPickerSection = `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)">
@@ -5260,6 +5277,10 @@ function _hubDetailLinksHTML(entry, p) {
       autoBtn = `<button class="btn btn-primary btn-sm" style="font-size:10px;background:#1a3020;color:var(--green);border-color:var(--gold-dim)"
            title="Send to one or more logged-in accounts via the Accounts tab"
            onclick="openAtcPicker({label: ${JSON.stringify(entry.name)}, asin: '${esc(val)}', retailer: 'amazon'})">⚡ Auto ATC</button>`;
+    } else if (val && r.key === 'walmart') {
+      autoBtn = `<button class="btn btn-primary btn-sm" style="font-size:10px;background:#1a3020;color:var(--green);border-color:var(--gold-dim)"
+           title="Send to one or more logged-in accounts via the Accounts tab"
+           onclick="openAtcPicker({label: ${JSON.stringify(entry.name)}, item_id: '${esc(val)}', retailer: 'walmart'})">⚡ Auto ATC</button>`;
     } else if (val && r.key === 'bestbuy') {
       autoBtn = `<button class="btn btn-primary btn-sm" style="font-size:10px;background:#1a3020;color:var(--green);border-color:var(--gold-dim)"
            title="Send to one or more logged-in accounts via the Accounts tab"
@@ -7997,9 +8018,11 @@ function renderDiscordFeed() {
   html += sorted.map((p, i) => discordPostHTML(p, i, sorted)).join('');
   list.innerHTML = html;
 
-  // Hide overflow
+  // Hide overflow — restore display:grid (not '') so we don't overwrite the
+  // inline grid layout. Setting style.display='' removes the inline rule and
+  // the element falls back to default block layout, which stacks the columns.
   document.querySelectorAll('#discord-list .discord-row').forEach((el, idx) => {
-    el.style.display = (_discordExpanded || idx < DISCORD_PREVIEW) ? '' : 'none';
+    el.style.display = (_discordExpanded || idx < DISCORD_PREVIEW) ? 'grid' : 'none';
   });
   updateDiscordExpandBtn();
 }
@@ -8368,20 +8391,38 @@ async function searchDiscordLog() {
       ? `<span style="color:var(--yellow);font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.reason)}">${esc(r.reason)}</span>`
       : '';
     const assignBtn = _buildDiscordAssignBtn(r, retailer);
-    // Pull an ASIN out of the message fields if retailer is Amazon
-    let asinForAtc = '';
+    // Pull a retailer-specific identifier out of the message fields/URL
+    let atcCtx = null;
     if (retailer === 'Amazon') {
       const m = (r.embed_fields || '').match(/(?:ASIN|SKU):\s*(?:```)?([A-Z0-9]{10})/i);
-      if (m) asinForAtc = m[1];
+      if (m) atcCtx = {asin: m[1], retailer: 'amazon'};
       else if (productUrl) {
         const m2 = productUrl.match(/\/dp\/([A-Z0-9]{10})/i);
-        if (m2) asinForAtc = m2[1];
+        if (m2) atcCtx = {asin: m2[1], retailer: 'amazon'};
       }
+    } else if (retailer === 'Walmart') {
+      let id = null;
+      const m = (r.embed_fields || '').match(/(?:Item|Walmart):\s*(?:```)?(\d{9,12})/i);
+      if (m) id = m[1];
+      else if (productUrl) {
+        const m2 = productUrl.match(/walmart\.com\/ip\/[^/]+\/(\d{9,12})/);
+        if (m2) id = m2[1];
+      }
+      if (id) atcCtx = {item_id: id, retailer: 'walmart'};
+    } else if (retailer === 'Best Buy') {
+      let id = null;
+      const m = (r.embed_fields || '').match(/(?:SKU|Item):\s*(?:```)?(\d{6,8})/i);
+      if (m) id = m[1];
+      else if (productUrl) {
+        const m2 = productUrl.match(/skuId=(\d{6,8})/) || productUrl.match(/\/site\/(?:[^/]+\/)?(\d{6,8})\.p/);
+        if (m2) id = m2[1];
+      }
+      if (id) atcCtx = {sku: id, retailer: 'bestbuy'};
     }
-    const atcBtn = asinForAtc
+    const atcBtn = atcCtx
       ? `<button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 6px;flex-shrink:0;color:var(--green)"
             title="Send to logged-in accounts (Auto ATC)"
-            onclick="event.stopPropagation();openAtcPicker({label: ${JSON.stringify(title)}, asin: '${esc(asinForAtc)}', retailer:'amazon'})">⚡ ATC</button>`
+            onclick='event.stopPropagation();openAtcPicker(${JSON.stringify({label: title, ...atcCtx})})'>⚡ ATC</button>`
       : '';
     return `<div style="display:grid;grid-template-columns:50px 50px 55px 60px 60px 160px 1fr 70px 60px;gap:6px;align-items:flex-start;font-size:10px;padding:3px 0;border-bottom:1px solid var(--border)">
       <span style="color:${color};font-weight:700;font-size:9px">${badge}</span>
@@ -9294,6 +9335,15 @@ async function _hubSaveAutoAtcAccounts(entryId) {
   });
 }
 
+async function _hubSaveAutoAtcMaxTotal(entryId, value) {
+  const v = (value || '').trim();
+  await fetch(`/api/product-hub/${entryId}/auto-atc-accounts`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({max_total: v === '' ? null : parseFloat(v)}),
+  });
+}
+
 // ── ATC Picker (manual checkout phase 2) ───────────────────────────
 let _atcContext = null;  // {label, url, asin, defaultQty}
 
@@ -9309,7 +9359,7 @@ function _renderAtcPicker() {
   const ctx = _atcContext || {};
   document.getElementById('atc-target-summary').innerHTML =
     ctx.label ? `Sending: <b>${esc(ctx.label)}</b>` : '';
-  document.getElementById('atc-url').value = ctx.url || ctx.asin || ctx.sku || '';
+  document.getElementById('atc-url').value = ctx.url || ctx.asin || ctx.sku || ctx.item_id || '';
   document.getElementById('atc-qty').value = ctx.defaultQty || 1;
   document.getElementById('atc-headless').checked = true;
   document.getElementById('atc-checkout').checked = false;
@@ -9376,15 +9426,18 @@ async function runAtcPicker() {
     return;
   }
 
-  // Detect identifier type — Amazon ASIN (10-char alnum) or Best Buy SKU (6-8 digits)
+  // Detect identifier type — Amazon ASIN (10-char alnum), Best Buy SKU (6-8 digits),
+  // or Walmart Item ID (longer numeric, typically 9-12 digits)
   const isAsin    = /^[A-Z0-9]{10}$/.test(url);
   const isSku     = /^\d{6,8}$/.test(url);
+  const isItemId  = /^\d{9,12}$/.test(url);
   const isHttpUrl = /^https?:\/\//i.test(url);
   const body = {account_ids: ids, quantity: qty, headless};
-  if (isHttpUrl)    body.url  = url;
-  else if (isAsin)  body.asin = url;
-  else if (isSku)   body.sku  = url;
-  else              body.url  = url;
+  if (isHttpUrl)        body.url     = url;
+  else if (isAsin)      body.asin    = url;
+  else if (isItemId)    body.item_id = url;
+  else if (isSku)       body.sku     = url;
+  else                  body.url     = url;
   const expectedAsin = isAsin ? url : null;
 
   const btn = document.getElementById('atc-go-btn');

@@ -41,11 +41,13 @@ from monitors.account_manager import (
 )
 from monitors.retailers import amazon as amazon_retailer
 from monitors.retailers import bestbuy as bestbuy_retailer
+from monitors.retailers import walmart as walmart_retailer
 
 # Map retailer key -> module so endpoints can dispatch generically
 _RETAILER_MODULES = {
     "amazon":  amazon_retailer,
     "bestbuy": bestbuy_retailer,
+    "walmart": walmart_retailer,
 }
 
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"
@@ -336,14 +338,26 @@ async def discord_gateway_loop():
                         "type": "tracked_deal_update",
                         "data": tracked.to_dict(),
                     })
-                    # Phase 4 — auto-fire ATC to configured accounts
-                    asyncio.create_task(_maybe_auto_fire_atc(tracked, entry))
+
+                    # Source-deal dedup: many channels (Bobble's Bot, Moonitor,
+                    # Refract) post the SAME restock multiple times in ~minutes
+                    # with slightly different titles, which the Jaccard match
+                    # treats as separate tracked deals. Suppress downstream
+                    # effects (DM + auto-fire) when the same retailer+product
+                    # was alerted in the last 10 minutes.
+                    suppress = _is_duplicate_recent_alert(entry)
+                    if suppress:
+                        await app_state.log("info",
+                            f"Skipping duplicate alert (recent: {suppress})", "discord")
+                    else:
+                        # Phase 4 — auto-fire ATC to configured accounts
+                        asyncio.create_task(_maybe_auto_fire_atc(tracked, entry))
 
                     # DM notification — send for all shown/tracked deals
                     dm_user = config.get("discord", {}).get("dm_user_id")
                     bot_token = config.get("discord", {}).get("bot_token", "")
                     dm_token = f"Bot {bot_token}" if bot_token else ""
-                    if dm_user and dm_token:
+                    if dm_user and dm_token and not suppress:
                         from web.state import _extract_product_name, _extract_retailer
                         title = _extract_product_name(entry)
                         retailer_name = _extract_retailer(entry)
@@ -2428,7 +2442,7 @@ async def list_accounts():
 @app.post("/api/accounts")
 async def create_account(body: dict):
     retailer = (body.get("retailer") or "").strip().lower()
-    if retailer not in ("amazon", "walmart", "target", "bestbuy"):
+    if retailer not in ("amazon", "walmart", "bestbuy", "target"):
         raise HTTPException(status_code=400, detail="Unsupported retailer")
     name     = (body.get("name") or "").strip() or f"{retailer.title()} Account"
     email    = (body.get("email") or "").strip()
@@ -2535,6 +2549,69 @@ async def trigger_account_login(account_id: str):
     return {"status": "started"}
 
 
+_recent_alert_keys: dict[str, datetime] = {}   # "retailer:product_id" -> last seen
+_RECENT_ALERT_WINDOW_MIN = 10                  # suppress duplicates within this window
+
+
+def _extract_alert_key(entry: dict) -> Optional[str]:
+    """Build a 'retailer:product_id' key from a Discord message so we can
+    dedupe duplicate restock alerts from the same retailer for the same
+    product within a short window. Returns None if no identifiable product."""
+    fields = ""
+    for e in (entry.get("embeds") or []):
+        f = e.get("fields") or {}
+        if isinstance(f, list):
+            for kv in f:
+                if isinstance(kv, dict):
+                    fields += f"\n{kv.get('name','')}: {kv.get('value','')}"
+        elif isinstance(f, dict):
+            for k, v in f.items():
+                fields += f"\n{k}: {v}"
+    fields += "\n" + (entry.get("content") or "")
+    for e in (entry.get("embeds") or []):
+        if e.get("url"):
+            fields += "\n" + e["url"]
+
+    # Amazon ASIN
+    m = re.search(r"/dp/([A-Z0-9]{10})", fields)
+    if m:                                        return f"amazon:{m.group(1)}"
+    m = re.search(r"\bASIN[:\s]*([A-Z0-9]{10})", fields, re.I)
+    if m:                                        return f"amazon:{m.group(1)}"
+    # Best Buy SKU
+    m = re.search(r"/site/[^/\s]+/(\d{6,8})\.p", fields)
+    if m:                                        return f"bestbuy:{m.group(1)}"
+    m = re.search(r"\bskuId[=:](\d{6,8})", fields)
+    if m:                                        return f"bestbuy:{m.group(1)}"
+    # Walmart Item ID
+    m = re.search(r"walmart\.com/ip/[^/\s]+/(\d{6,12})", fields)
+    if m:                                        return f"walmart:{m.group(1)}"
+    # Target TCIN
+    m = re.search(r"target\.com/p/[^/\s]+/-/A-(\d{6,10})", fields)
+    if m:                                        return f"target:{m.group(1)}"
+    return None
+
+
+def _is_duplicate_recent_alert(entry: dict) -> Optional[str]:
+    """Returns a description of the prior alert if the same retailer+product
+    was alerted in the last _RECENT_ALERT_WINDOW_MIN minutes, else None.
+    Records this alert as the latest sighting for that key."""
+    key = _extract_alert_key(entry)
+    if not key:
+        return None
+    now = datetime.now()
+    cutoff = now - timedelta(minutes=_RECENT_ALERT_WINDOW_MIN)
+    # Garbage-collect old keys
+    for k in list(_recent_alert_keys.keys()):
+        if _recent_alert_keys[k] < cutoff:
+            del _recent_alert_keys[k]
+    last = _recent_alert_keys.get(key)
+    _recent_alert_keys[key] = now
+    if last and last >= cutoff:
+        delta_min = (now - last).total_seconds() / 60
+        return f"{key} ({delta_min:.1f} min ago)"
+    return None
+
+
 _atc_fire_history: deque = deque(maxlen=2000)
 _AUTO_ATC_COOLDOWN_MIN = 30   # don't re-fire same account+ASIN within this window
 _AUTO_ATC_DAILY_CAP    = 1    # successful ATCs per account+ASIN per UTC day
@@ -2570,30 +2647,54 @@ def _atc_record_fire(account_id: str, asin: str, success: bool) -> None:
     })
 
 
-async def _review_after_auto_atc(acc, asin: str, entry_name: str) -> None:
-    """After a successful auto-fire ATC, open a visible browser at the order-
-    review page so the user can verify and click Place Your Order. Runs in the
-    background — never blocks the auto-fire dispatch."""
+async def _review_after_auto_atc(acc, pid: str, entry_name: str,
+                                  max_total: Optional[float] = None) -> None:
+    """After a successful auto-fire ATC, run checkout. If max_total is set on
+    the watchlist entry, auto-confirm headlessly with that as the safety cap.
+    Otherwise open a visible browser at the order-review page and let the user
+    click Place Order themselves. Supports Amazon and Walmart (Best Buy has
+    no automated checkout flow yet — manual review only via the open window)."""
     try:
         cfg     = load_config()
         stealth = cfg.get("stealth", {}) or {}
         from monitors.defaults import get_user_agent, get_browser_channel
         user_agent   = get_user_agent(stealth)
         browser_chan = get_browser_channel(stealth)
-        await app_state.log("info",
-            f"[{acc.name}] opening review browser for '{entry_name}' (ASIN {asin})", "accounts")
-        result = await amazon_retailer.checkout(
-            acc, user_agent, browser_chan,
-            headless=False,           # visible — that's the whole point
-            auto_confirm=False,       # never auto-place from auto-fire path
-            max_total=None,
-            expected_asin=asin,
-        )
-        # Record the review-stage outcome too so the user has full audit trail
+
+        auto_confirm = max_total is not None and max_total > 0
+        retailer_label = acc.retailer
+        if auto_confirm:
+            await app_state.log("info",
+                f"[{acc.name}] auto-confirming {retailer_label} checkout for '{entry_name}' "
+                f"({pid}, cap ${max_total:.2f})", "accounts")
+        else:
+            await app_state.log("info",
+                f"[{acc.name}] opening {retailer_label} review browser for '{entry_name}' "
+                f"({pid}) — set a max-total on the watchlist item to auto-confirm", "accounts")
+
+        if acc.retailer == "amazon":
+            result = await amazon_retailer.checkout(
+                acc, user_agent, browser_chan,
+                headless=auto_confirm,
+                auto_confirm=auto_confirm,
+                max_total=max_total,
+                expected_asin=pid,
+            )
+        elif acc.retailer == "walmart":
+            result = await walmart_retailer.checkout(
+                acc, user_agent, browser_chan,
+                headless=auto_confirm,
+                auto_confirm=auto_confirm,
+                max_total=max_total,
+                expected_item_id=pid,
+            )
+        else:
+            return  # Best Buy: ATC's persistent-Chrome window already left open
+
         try:
             await price_db.record_order(
                 account_id=acc.id, account_name=acc.name, retailer=acc.retailer,
-                identifier=asin, product_label=entry_name,
+                identifier=pid, product_label=entry_name,
                 action="checkout", success=bool(result.get("success")),
                 order_id=result.get("order_id"),
                 total=result.get("total"),
@@ -2602,12 +2703,13 @@ async def _review_after_auto_atc(acc, asin: str, entry_name: str) -> None:
             )
         except Exception:
             pass
+        log_label = "auto-confirm" if auto_confirm else "review"
         await app_state.log(
             "info" if result.get("success") else "warn",
-            f"[{acc.name}] review: {result.get('message', '?')}", "accounts")
+            f"[{acc.name}] {log_label}: {result.get('message', '?')}", "accounts")
     except Exception as e:
         await app_state.log("warn",
-            f"[{acc.name}] review browser failed: {e}", "accounts")
+            f"[{acc.name}] checkout flow failed: {e}", "accounts")
 
 
 async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
@@ -2653,8 +2755,9 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                 elif "target.com" in url0:              deal_retailer_key = "target"
 
         # Try to extract retailer-specific identifiers from the latest sighting URLs
-        scanned_asin = None
-        scanned_sku  = None
+        scanned_asin    = None
+        scanned_sku     = None
+        scanned_item_id = None
         for sighting in (tracked_deal.sightings or [])[:5]:
             url = sighting.url or ""
             if not scanned_asin:
@@ -2663,6 +2766,8 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                 m = re.search(r"/site/(?:[^/]+/)?(\d{6,8})\.p", url);       scanned_sku  = m.group(1) if m else None
                 if not scanned_sku:
                     m = re.search(r"skuId=(\d{6,8})", url);                 scanned_sku  = m.group(1) if m else None
+            if not scanned_item_id:
+                m = re.search(r"walmart\.com/ip/[^/]+/(\d{6,12})", url);    scanned_item_id = m.group(1) if m else None
             for cu in (sighting.checkout_urls or []):
                 u = cu.get("url", "")
                 if not scanned_asin:
@@ -2671,14 +2776,20 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                     m = re.search(r"/dp/([A-Z0-9]{10})", u);                scanned_asin = m.group(1) if m else None
                 if not scanned_sku:
                     m = re.search(r"skuId=?(\d{6,8})", u);                  scanned_sku  = m.group(1) if m else None
-            if scanned_asin and scanned_sku:
+                if not scanned_item_id:
+                    m = re.search(r"items=(\d{6,12})", u);                  scanned_item_id = m.group(1) if m else None
+                if not scanned_item_id:
+                    m = re.search(r"walmart\.com/ip/[^/]+/(\d{6,12})", u);  scanned_item_id = m.group(1) if m else None
+            if scanned_asin and scanned_sku and scanned_item_id:
                 break
 
         for entry in owners:
-            stored_asin = (entry.retailer_product_ids or {}).get("amazon")
-            stored_sku  = (entry.retailer_product_ids or {}).get("bestbuy")
-            asin = scanned_asin or stored_asin
-            sku  = scanned_sku  or stored_sku
+            stored_asin    = (entry.retailer_product_ids or {}).get("amazon")
+            stored_sku     = (entry.retailer_product_ids or {}).get("bestbuy")
+            stored_item_id = (entry.retailer_product_ids or {}).get("walmart")
+            asin    = scanned_asin    or stored_asin
+            sku     = scanned_sku     or stored_sku
+            item_id = scanned_item_id or stored_item_id
 
             for account_id in entry.auto_atc_account_ids:
                 acc = account_manager.find(account_id)
@@ -2710,6 +2821,10 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                     pid = sku
                     if not pid: continue
                     url = bestbuy_retailer.url_from_sku(pid)
+                elif acc.retailer == "walmart":
+                    pid = item_id
+                    if not pid: continue
+                    url = walmart_retailer.url_from_item_id(pid)
                 else:
                     continue
 
@@ -2739,8 +2854,11 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                 # at the order-review page so the user can verify the cart total,
                 # address, and payment method, then click Place Your Order.
                 # Best Buy doesn't have a stable review-page URL flow yet.
-                if result.get("success") and acc.retailer == "amazon":
-                    asyncio.create_task(_review_after_auto_atc(acc, pid, entry.name))
+                if result.get("success") and acc.retailer in ("amazon", "walmart"):
+                    asyncio.create_task(_review_after_auto_atc(
+                        acc, pid, entry.name,
+                        max_total=entry.auto_atc_max_total,
+                    ))
                 await app_state.log(
                     "info" if result.get("success") else "warn",
                     f"[{acc.name}] auto-ATC: {result.get('message', '?')}", "accounts")
@@ -2758,7 +2876,7 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
 
 
 def _resolve_atc_url(body: dict, retailer: str = "amazon") -> str:
-    """Accept {url}, {asin}, {sku}, or {retailer_product_ids} from the body."""
+    """Accept {url}, {asin}, {sku}, {item_id}, or {retailer_product_ids}."""
     u = (body.get("url") or "").strip()
     if u:
         return u
@@ -2768,14 +2886,17 @@ def _resolve_atc_url(body: dict, retailer: str = "amazon") -> str:
     sku = (body.get("sku") or "").strip()
     if sku:
         return bestbuy_retailer.url_from_sku(sku)
+    item_id = (body.get("item_id") or "").strip()
+    if item_id:
+        return walmart_retailer.url_from_item_id(item_id)
     rids = body.get("retailer_product_ids") or {}
-    if retailer == "amazon" and rids.get("amazon"):
-        return amazon_retailer.url_from_asin(rids["amazon"])
-    if retailer == "bestbuy" and rids.get("bestbuy"):
-        return bestbuy_retailer.url_from_sku(rids["bestbuy"])
+    if retailer == "amazon"  and rids.get("amazon"):  return amazon_retailer.url_from_asin(rids["amazon"])
+    if retailer == "bestbuy" and rids.get("bestbuy"): return bestbuy_retailer.url_from_sku(rids["bestbuy"])
+    if retailer == "walmart" and rids.get("walmart"): return walmart_retailer.url_from_item_id(rids["walmart"])
     # Any retailer ID falls through
     if rids.get("amazon"):  return amazon_retailer.url_from_asin(rids["amazon"])
     if rids.get("bestbuy"): return bestbuy_retailer.url_from_sku(rids["bestbuy"])
+    if rids.get("walmart"): return walmart_retailer.url_from_item_id(rids["walmart"])
     return ""
 
 
@@ -3138,6 +3259,38 @@ async def get_stats(index: int):
 async def get_retailer_overview():
     """Return retailer intelligence overview data."""
     return await price_db.get_retailer_overview()
+
+@app.get("/api/price-history/{index}")
+async def get_price_history(index: int, days: int = 30):
+    """Return TCGPlayer market-price history points for a watchlist product.
+    Used by the watchlist Trends tab to render the line chart."""
+    if index < 0 or index >= len(app_state.product_statuses):
+        raise HTTPException(status_code=404, detail="Product not found")
+    ps = app_state.product_statuses[index]
+    if ps.site not in ("tcgplayer", "manapool"):
+        return {"points": []}
+    days = max(1, min(365, int(days)))
+    rows = await price_db.get_tcg_history(ps.url, days=days)
+    points = []
+    for r in rows:
+        ts_str = r.get("checked_at") or ""
+        try:
+            from datetime import datetime as _dt
+            ts = _dt.strptime(ts_str, "%Y-%m-%d %H:%M:%S").timestamp()
+        except Exception:
+            try:
+                ts = _dt.fromisoformat(ts_str).timestamp()
+            except Exception:
+                continue
+        points.append({
+            "checked_at": ts,
+            "market_price": r.get("market_price"),
+            "low_price":    r.get("low_price"),
+            "listings":     r.get("listings"),
+            "quantity":     r.get("quantity"),
+        })
+    return {"points": points}
+
 
 @app.get("/api/tcg-trends")
 async def get_tcg_trends():
@@ -3840,11 +3993,22 @@ async def set_hub_auto_atc_accounts(entry_id: str, body: dict):
     entry = product_hub.find_by_id(entry_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
-    ids = body.get("account_ids") or []
-    if not isinstance(ids, list):
-        raise HTTPException(status_code=400, detail="account_ids must be a list")
-    valid_ids = {a.id for a in account_manager.accounts}
-    entry.auto_atc_account_ids = [str(i) for i in ids if str(i) in valid_ids]
+    if "account_ids" in body:
+        ids = body.get("account_ids") or []
+        if not isinstance(ids, list):
+            raise HTTPException(status_code=400, detail="account_ids must be a list")
+        valid_ids = {a.id for a in account_manager.accounts}
+        entry.auto_atc_account_ids = [str(i) for i in ids if str(i) in valid_ids]
+    if "max_total" in body:
+        v = body.get("max_total")
+        if v in (None, "", 0):
+            entry.auto_atc_max_total = None
+        else:
+            try:
+                f = float(v)
+                entry.auto_atc_max_total = f if f > 0 else None
+            except (TypeError, ValueError):
+                pass
     product_hub.save_to_disk()
     await app_state.ws.broadcast({"type": "product_hub_full", "data": [e.to_dict() for e in product_hub.entries]})
     return entry.to_dict()

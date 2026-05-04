@@ -482,6 +482,7 @@ class ProductEntry:
     ignored_retailer_ids: dict = field(default_factory=dict)    # {retailer_key: [value, ...]} — never auto-fill these
     confirmed_retailer_ids: list[str] = field(default_factory=list)  # retailer keys the user has locked/confirmed
     auto_atc_account_ids: list[str] = field(default_factory=list)  # account IDs to auto-fire ATC when this item gets a new deal sighting
+    auto_atc_max_total: Optional[float] = None  # if set, auto-confirm checkout when total <= this; if None, stop at review page
 
     def to_dict(self) -> dict:
         d = {
@@ -497,12 +498,16 @@ class ProductEntry:
             "ignored_retailer_ids": self.ignored_retailer_ids,
             "confirmed_retailer_ids": self.confirmed_retailer_ids,
             "auto_atc_account_ids": self.auto_atc_account_ids,
+            "auto_atc_max_total": self.auto_atc_max_total,
         }
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "ProductEntry":
         urls = [RetailerLink(**r) for r in d.get("retailer_urls", [])]
+        max_total = d.get("auto_atc_max_total")
+        try: max_total = float(max_total) if max_total is not None else None
+        except (TypeError, ValueError): max_total = None
         return cls(
             id=d["id"],
             name=d["name"],
@@ -516,6 +521,7 @@ class ProductEntry:
             ignored_retailer_ids=d.get("ignored_retailer_ids", {}),
             confirmed_retailer_ids=d.get("confirmed_retailer_ids", []),
             auto_atc_account_ids=d.get("auto_atc_account_ids", []),
+            auto_atc_max_total=max_total,
         )
 
 
