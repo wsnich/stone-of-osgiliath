@@ -3091,7 +3091,22 @@ async def _dispatch_atc(acc, url: str, user_agent: str, browser_chan: Optional[s
     if not mod:
         return {"success": False, "message": f"Retailer '{acc.retailer}' not yet implemented"}
 
-    # Pool path: only Amazon/Walmart support it; Best Buy uses persistent_context already
+    # Best Buy: skip Playwright entirely. Akamai's HTTP/2 protocol-error block
+    # makes any automated session unreliable, and the user is already logged
+    # in via their main browser (the same one running the Osgiliath UI). Open
+    # the product URL there — they click Add to Cart manually with one tap.
+    if acc.retailer == "bestbuy":
+        try:
+            import webbrowser
+            webbrowser.open(url, new=2)  # new=2: new tab if possible
+            return {"success": True,
+                    "message": "Opened product page in your main browser — click Add to Cart manually",
+                    "browser_left_open": True,
+                    "manual": True}
+        except Exception as e:
+            return {"success": False, "message": f"Failed to open in main browser: {e}"}
+
+    # Pool path: only Amazon/Walmart support it
     pool_handle = browser_pool.get(acc.id) if acc.retailer in ("amazon", "walmart") else None
     if pool_handle and hasattr(mod, "add_to_cart_via_pool"):
         try:
