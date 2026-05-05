@@ -340,6 +340,14 @@ async def _atc_via_url(page, asin: str, quantity: int) -> dict:
                     "message": f"Added to cart{qty_str}{cart_str}",
                     "cart_count": cart_count, "quantity_added": quantity, "via": "url"}
 
+    # Did the URL handler land us on a page that shows a hard-block notice?
+    # If so, no point retrying via the click flow.
+    block = await _detect_amazon_block_states(page)
+    if block.get("seller_qty_limit_met") or block.get("purchase_limit"):
+        return {"success": False, "fallback": False, "purchase_limited": True,
+                "message": "Quantity limit met for this seller — Amazon time-locked this account from buying more",
+                "cart_count": None}
+
     # Detect explicit unavailable / OOS pages so we don't waste time on click fallback
     try:
         diag = await page.evaluate(r"""() => {
@@ -396,6 +404,15 @@ async def _atc_on_page(page, url: str, quantity: int = 1,
 
         if "/ap/signin" in page.url:
             return {"success": False, "message": "Session expired — re-login this account", "cart_count": None}
+
+        # The product page itself can show "Quantity limit met for this seller"
+        # in the buy-box when this account has hit the per-seller cap. Detect
+        # before touching the ATC button — Amazon will reject the add silently.
+        pdp_block = await _detect_amazon_block_states(page)
+        if pdp_block.get("seller_qty_limit_met") or pdp_block.get("purchase_limit"):
+            return {"success": False, "purchase_limited": True,
+                    "message": "Quantity limit met for this seller — Amazon time-locked this account from buying more",
+                    "cart_count": None}
 
         target_qty = quantity
         if use_max_quantity:
