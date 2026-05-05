@@ -35,6 +35,28 @@ _OFFSCREEN_X, _OFFSCREEN_Y = -9000, -9000
 _ONSCREEN_X,  _ONSCREEN_Y  = 100, 100
 _WINDOW_WIDTH, _WINDOW_HEIGHT = 1280, 900
 
+# Init script injected into every page in the pool. Replaces the WebAuthn
+# API entry points with rejecting stubs so Amazon's sign-in cannot trigger
+# Windows Hello no matter what Chromium feature flags are in play.
+_DISABLE_WEBAUTHN_JS = r"""
+(() => {
+  const reject = () => Promise.reject(new DOMException("not allowed", "NotAllowedError"));
+  try {
+    if (navigator.credentials) {
+      navigator.credentials.get = reject;
+      navigator.credentials.create = reject;
+      navigator.credentials.preventSilentAccess = reject;
+    }
+  } catch (e) { /* ignore */ }
+  try {
+    if (window.PublicKeyCredential) {
+      window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);
+      window.PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
+    }
+  } catch (e) { /* ignore */ }
+})();
+"""
+
 _BROWSER_ARGS_BASE = [
     "--password-store=basic",
     "--disable-save-password-bubble",
@@ -110,6 +132,15 @@ class PersistentBrowser:
                 viewport={"width": _WINDOW_WIDTH, "height": _WINDOW_HEIGHT},
                 storage_state=str(session_path),
             )
+            # Kill the WebAuthn API at the page level. Without this, Amazon's
+            # sign-in form calls navigator.credentials.get() and triggers
+            # Windows Hello regardless of which Chromium feature flags are set.
+            # Stubbing the API to a permanent rejection makes the page fall
+            # back to email + password.
+            try:
+                await self.ctx.add_init_script(_DISABLE_WEBAUTHN_JS)
+            except Exception:
+                pass
             log.info(f"[{account.name}] persistent browser started off-screen")
             return True
         except Exception as e:

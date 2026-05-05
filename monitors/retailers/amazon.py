@@ -42,6 +42,38 @@ _BROWSER_ARGS = [
     "--disable-features=WebAuthenticationConditionalUI,PasswordManagerOnboarding,PasswordCheck",
 ]
 
+# Stubs the WebAuthn / passkey API at the page level. Belt-and-suspenders on
+# top of the Chromium feature flags above — even if Amazon's page calls
+# navigator.credentials.get() directly, it now gets a rejection instead of
+# triggering Windows Hello.
+_NO_WEBAUTHN_INIT_SCRIPT = r"""
+(() => {
+  const reject = () => Promise.reject(new DOMException("not allowed", "NotAllowedError"));
+  try {
+    if (navigator.credentials) {
+      navigator.credentials.get = reject;
+      navigator.credentials.create = reject;
+      navigator.credentials.preventSilentAccess = reject;
+    }
+  } catch (e) {}
+  try {
+    if (window.PublicKeyCredential) {
+      window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);
+      window.PublicKeyCredential.isConditionalMediationAvailable = () => Promise.resolve(false);
+    }
+  } catch (e) {}
+})();
+"""
+
+
+async def _harden_context(ctx) -> None:
+    """Apply page-level PIN-prompt blockers to a freshly created context.
+    Best-effort; never raises."""
+    try:
+        await ctx.add_init_script(_NO_WEBAUTHN_INIT_SCRIPT)
+    except Exception:
+        pass
+
 
 def _proxy_to_playwright(proxy_str: str) -> Optional[dict]:
     """Convert host:port:user:pass into Playwright proxy dict."""
@@ -119,6 +151,7 @@ async def login(account: Account,
                 pass
 
         ctx  = await browser.new_context(**context_kw)
+        await _harden_context(ctx)
         page = await ctx.new_page()
         try:
             await on_status(STATUS_AWAITING, f"Opening Amazon for '{account.name}'…")
@@ -629,6 +662,7 @@ async def add_to_cart(account: Account,
                 viewport={"width": 1280, "height": 900},
                 storage_state=str(session_path),
             )
+            await _harden_context(ctx)
             page = await ctx.new_page()
             try:
                 await page.goto(url, timeout=45000, wait_until="domcontentloaded")
@@ -882,6 +916,7 @@ async def clear_cart(account: Account,
                 user_agent=user_agent, viewport={"width": 1280, "height": 900},
                 storage_state=str(session_path),
             )
+            await _harden_context(ctx)
             page = await ctx.new_page()
             await page.goto("https://www.amazon.com/gp/cart/view.html",
                             timeout=45000, wait_until="domcontentloaded")
@@ -962,6 +997,7 @@ async def checkout(account: Account,
             user_agent=user_agent, viewport={"width": 1280, "height": 900},
             storage_state=str(session_path),
         )
+        await _harden_context(ctx)
         page = await ctx.new_page()
 
         async def _close_with(result):
