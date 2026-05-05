@@ -379,54 +379,65 @@ async def discord_gateway_loop():
                         # gate on whether the entry is already linked to this
                         # tracked deal, since fresh deals from a noisy source
                         # often arrive before any linkage exists.
+                        # Wrapped — a malformed embed must NEVER kill the
+                        # gateway loop, so any failure here just logs and
+                        # falls through to send the DM.
                         if dm_user:
-                            from urllib.parse import urlparse
-                            import re as _re
-                            def _bare_host(u: str) -> str:
-                                h = urlparse(u).netloc.lower()
-                                return h[4:] if h.startswith("www.") else h
-                            # Collect every URL that might represent the deal:
-                            # embed.url, the message content text, and embed
-                            # description fields (some bots stash the real URL
-                            # there). Skip known tracker/wrapper hosts.
-                            candidate_urls: list[str] = []
-                            for _e in entry.get("embeds", []):
-                                _u = _e.get("url", "")
-                                if _u: candidate_urls.append(_u)
-                                desc = _e.get("description", "")
-                                if desc:
-                                    candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', desc))
-                                for _f in _e.get("fields", []):
-                                    fv = _f.get("value", "")
-                                    if fv:
-                                        candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', fv))
-                            content = entry.get("content", "")
-                            if content:
-                                candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', content))
-                            skip_hosts = {"refractbot.com", "valoraio.com", "google.com",
-                                          "discord.com", "discord.gg", "discordapp.com"}
-                            deal_hosts: set[str] = set()
-                            for _u in candidate_urls:
-                                h = _bare_host(_u)
-                                if h and h not in skip_hosts and not any(s in _u for s in [
-                                    "/aclk", "/url?", "gclid=",
-                                ]):
-                                    deal_hosts.add(h)
-                            if deal_hosts:
-                                muted_match = None
-                                for _hub in product_hub.entries:
-                                    for _rl in (_hub.retailer_urls or []):
-                                        if not _rl.muted: continue
-                                        rl_host = _bare_host(_rl.url)
-                                        if rl_host and rl_host in deal_hosts:
-                                            muted_match = (_hub.name, _rl.retailer, rl_host)
-                                            break
-                                    if muted_match: break
-                                if muted_match:
-                                    await app_state.log("info",
-                                        f"Skipped DM ({muted_match[1]} muted at {muted_match[2]} on '{muted_match[0]}'): {title[:60]}",
-                                        "discord")
-                                    dm_user = None
+                            try:
+                                from urllib.parse import urlparse
+                                import re as _re
+                                def _bare_host(u: str) -> str:
+                                    h = urlparse(u).netloc.lower()
+                                    return h[4:] if h.startswith("www.") else h
+                                # Collect every URL that might represent the deal:
+                                # embed.url, the message content text, and embed
+                                # description / field values. Some bots produce
+                                # non-dict embed shapes — guard with isinstance.
+                                candidate_urls: list[str] = []
+                                for _e in entry.get("embeds", []) or []:
+                                    if not isinstance(_e, dict):
+                                        continue
+                                    _u = _e.get("url", "")
+                                    if isinstance(_u, str) and _u:
+                                        candidate_urls.append(_u)
+                                    desc = _e.get("description", "")
+                                    if isinstance(desc, str) and desc:
+                                        candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', desc))
+                                    for _f in _e.get("fields", []) or []:
+                                        if not isinstance(_f, dict):
+                                            continue
+                                        fv = _f.get("value", "")
+                                        if isinstance(fv, str) and fv:
+                                            candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', fv))
+                                content = entry.get("content", "")
+                                if isinstance(content, str) and content:
+                                    candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', content))
+                                skip_hosts = {"refractbot.com", "valoraio.com", "google.com",
+                                              "discord.com", "discord.gg", "discordapp.com"}
+                                deal_hosts: set[str] = set()
+                                for _u in candidate_urls:
+                                    h = _bare_host(_u)
+                                    if h and h not in skip_hosts and not any(s in _u for s in [
+                                        "/aclk", "/url?", "gclid=",
+                                    ]):
+                                        deal_hosts.add(h)
+                                if deal_hosts:
+                                    muted_match = None
+                                    for _hub in product_hub.entries:
+                                        for _rl in (_hub.retailer_urls or []):
+                                            if not _rl.muted: continue
+                                            rl_host = _bare_host(_rl.url)
+                                            if rl_host and rl_host in deal_hosts:
+                                                muted_match = (_hub.name, _rl.retailer, rl_host)
+                                                break
+                                        if muted_match: break
+                                    if muted_match:
+                                        await app_state.log("info",
+                                            f"Skipped DM ({muted_match[1]} muted at {muted_match[2]} on '{muted_match[0]}'): {title[:60]}",
+                                            "discord")
+                                        dm_user = None
+                            except Exception as _mute_err:
+                                log.warning(f"mute check failed for entry, falling through to DM: {_mute_err}")
                         price = entry.get("price")
 
                         # Optionally find matching TCGPlayer product for price context
