@@ -248,6 +248,64 @@ class PersistentBrowser:
         except Exception:
             return None
 
+    def _win32_force_foreground(self) -> bool:
+        """Windows-only: enumerate top-level windows owned by the browser
+        process and pull them to the top of the Z-order. CDP setWindowBounds
+        moves the window but does not change Z-order, so on Windows 11 the
+        pool window sits behind the user's IDE / browser and stays invisible."""
+        import sys
+        if not sys.platform.startswith("win"):
+            return True   # treat as success on non-Windows
+        try:
+            import ctypes
+            from ctypes import wintypes as wt
+        except Exception:
+            return False
+        proc = self.browser.process() if self.browser else None
+        target_pid = proc.pid if proc else None
+        if not target_pid:
+            return False
+        user32 = ctypes.windll.user32
+        SWP_NOMOVE     = 0x0002
+        SWP_NOSIZE     = 0x0001
+        SWP_NOACTIVATE = 0x0010
+        SWP_SHOWWINDOW = 0x0040
+        HWND_TOPMOST    = -1
+        HWND_NOTOPMOST  = -2
+        SW_RESTORE = 9
+        # Chromium spawns child renderer processes — only the parent has the
+        # visible browser window. We match by pid OR by parent_pid via a
+        # quick toolhelp32 walk; simpler is just to match windows whose owning
+        # pid is target_pid (the launched browser) — that's the main window.
+        matched: list = []
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
+        def _enum_proc(hwnd, _):
+            pid = wt.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == target_pid and user32.IsWindowVisible(hwnd):
+                matched.append(hwnd)
+            return True
+        try:
+            user32.EnumWindows(_enum_proc, 0)
+        except Exception as e:
+            log.warning(f"EnumWindows failed: {e}")
+            return False
+        if not matched:
+            log.warning(f"[{self.account_id}] no Win32 window found for pid {target_pid}")
+            return False
+        for hwnd in matched:
+            try:
+                user32.ShowWindow(hwnd, SW_RESTORE)
+                # Topmost-then-nottopmost trick: brings window to top of
+                # Z-order without permanently pinning it on top.
+                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE)
+                user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            except Exception as e:
+                log.warning(f"SetWindowPos failed for hwnd {hwnd}: {e}")
+        return True
+
     async def _send_cdp_window_bounds(self, x: int, y: int,
                                        *, force_visible: bool = False) -> bool:
         """Move the browser window via Chrome DevTools Protocol.
@@ -296,6 +354,13 @@ class PersistentBrowser:
 
     async def show_window(self) -> bool:
         ok = await self._send_cdp_window_bounds(_ONSCREEN_X, _ONSCREEN_Y, force_visible=True)
+        # CDP only changes window position/state — it does NOT change Z-order.
+        # Pull the OS window to the top of the Z-order via Win32 so it isn't
+        # buried behind the user's other apps.
+        try:
+            self._win32_force_foreground()
+        except Exception as e:
+            log.warning(f"win32 foreground failed: {e}")
         if ok:
             self.visible = True
         else:
