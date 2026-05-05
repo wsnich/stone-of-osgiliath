@@ -109,7 +109,10 @@ async def login(account: Account,
 
     async with async_playwright() as pw:
         launch_kw = {"headless": False, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # NOT applying browser_channel — real Chrome would trigger Windows
+        # Hello PIN prompts via Credential Manager. Bundled Chromium is
+        # vault-free.
+        _ = browser_channel
         if proxy:           launch_kw["proxy"] = proxy
 
         browser = await pw.chromium.launch(**launch_kw)
@@ -203,7 +206,10 @@ async def add_to_cart(account: Account,
 
     async with async_playwright() as pw:
         launch_kw = {"headless": headless, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # NOT applying browser_channel — real Chrome would trigger Windows
+        # Hello PIN prompts via Credential Manager. Bundled Chromium is
+        # vault-free.
+        _ = browser_channel
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         try:
@@ -382,7 +388,10 @@ async def checkout(account: Account,
 
     async with async_playwright() as pw:
         launch_kw = {"headless": headless, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # NOT applying browser_channel — real Chrome would trigger Windows
+        # Hello PIN prompts via Credential Manager. Bundled Chromium is
+        # vault-free.
+        _ = browser_channel
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         ctx = await browser.new_context(
@@ -543,7 +552,10 @@ async def open_browser(account: Account,
     try:
         pw = await async_playwright().start()
         launch_kw = {"headless": False, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # NOT applying browser_channel — real Chrome would trigger Windows
+        # Hello PIN prompts via Credential Manager. Bundled Chromium is
+        # vault-free.
+        _ = browser_channel
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         ctx = await browser.new_context(
@@ -576,7 +588,10 @@ async def health_check(account: Account,
     proxy = _proxy_to_playwright(account.proxy)
     async with async_playwright() as pw:
         launch_kw = {"headless": True, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # NOT applying browser_channel — real Chrome would trigger Windows
+        # Hello PIN prompts via Credential Manager. Bundled Chromium is
+        # vault-free.
+        _ = browser_channel
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         try:

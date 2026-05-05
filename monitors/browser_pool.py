@@ -95,8 +95,13 @@ class PersistentBrowser:
                 "headless": False,            # visible BUT off-screen
                 "args": list(_BROWSER_ARGS_BASE),
             }
-            if browser_channel:
-                launch_kw["channel"] = browser_channel
+            # Pool only serves Amazon/Walmart. Both trigger Windows Hello
+            # PIN prompts when launched via real Chrome (browser_channel
+            # ="chrome") because real Chrome integrates with the Windows
+            # Credential Manager. Force bundled Chromium for the pool
+            # regardless of the global config — Best Buy uses its own
+            # persistent_context launch path with channel="chrome".
+            _ = browser_channel
             if proxy:
                 launch_kw["proxy"] = proxy
             self.browser = await self.pw.chromium.launch(**launch_kw)

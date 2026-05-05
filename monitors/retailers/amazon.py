@@ -99,8 +99,10 @@ async def login(account: Account,
 
     async with async_playwright() as pw:
         launch_kw = {"headless": False, "args": list(_BROWSER_ARGS)}
-        if browser_channel:
-            launch_kw["channel"] = browser_channel
+        # Intentionally NOT setting launch_kw["channel"] — see comment in the
+        # other launch sites. Real Chrome triggers Windows Hello PIN prompts
+        # on Amazon sign-in via Windows Credential Manager integration.
+        _ = browser_channel
         if proxy:
             launch_kw["proxy"] = proxy
 
@@ -613,7 +615,12 @@ async def add_to_cart(account: Account,
     success = False  # readable from `finally` so we know whether to keep browser open
     async with async_playwright() as pw:
         launch_kw = {"headless": headless, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # Intentionally NOT setting launch_kw["channel"] — even when the
+        # global config requests "chrome", real Chrome integrates with
+        # Windows Credential Manager and triggers Windows Hello PIN prompts
+        # on Amazon's sign-in form. Bundled Chromium with --password-store=basic
+        # is OS-vault-free and won't pop the PIN dialog.
+        _ = browser_channel  # parameter kept for signature compat
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         try:
@@ -862,7 +869,12 @@ async def clear_cart(account: Account,
     proxy = _proxy_to_playwright(account.proxy)
     async with async_playwright() as pw:
         launch_kw = {"headless": headless, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # Intentionally NOT setting launch_kw["channel"] — even when the
+        # global config requests "chrome", real Chrome integrates with
+        # Windows Credential Manager and triggers Windows Hello PIN prompts
+        # on Amazon's sign-in form. Bundled Chromium with --password-store=basic
+        # is OS-vault-free and won't pop the PIN dialog.
+        _ = browser_channel  # parameter kept for signature compat
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         try:
@@ -938,7 +950,12 @@ async def checkout(account: Account,
 
     async with async_playwright() as pw:
         launch_kw = {"headless": headless, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # Intentionally NOT setting launch_kw["channel"] — even when the
+        # global config requests "chrome", real Chrome integrates with
+        # Windows Credential Manager and triggers Windows Hello PIN prompts
+        # on Amazon's sign-in form. Bundled Chromium with --password-store=basic
+        # is OS-vault-free and won't pop the PIN dialog.
+        _ = browser_channel  # parameter kept for signature compat
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         ctx = await browser.new_context(
@@ -1108,7 +1125,12 @@ async def open_browser(account: Account,
     try:
         pw = await async_playwright().start()
         launch_kw = {"headless": False, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # Intentionally NOT setting launch_kw["channel"] — even when the
+        # global config requests "chrome", real Chrome integrates with
+        # Windows Credential Manager and triggers Windows Hello PIN prompts
+        # on Amazon's sign-in form. Bundled Chromium with --password-store=basic
+        # is OS-vault-free and won't pop the PIN dialog.
+        _ = browser_channel  # parameter kept for signature compat
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         ctx = await browser.new_context(
@@ -1147,7 +1169,12 @@ async def health_check(account: Account,
     proxy = _proxy_to_playwright(account.proxy)
     async with async_playwright() as pw:
         launch_kw = {"headless": True, "args": list(_BROWSER_ARGS)}
-        if browser_channel: launch_kw["channel"] = browser_channel
+        # Intentionally NOT setting launch_kw["channel"] — even when the
+        # global config requests "chrome", real Chrome integrates with
+        # Windows Credential Manager and triggers Windows Hello PIN prompts
+        # on Amazon's sign-in form. Bundled Chromium with --password-store=basic
+        # is OS-vault-free and won't pop the PIN dialog.
+        _ = browser_channel  # parameter kept for signature compat
         if proxy:           launch_kw["proxy"] = proxy
         browser = await pw.chromium.launch(**launch_kw)
         try:
