@@ -373,40 +373,58 @@ async def discord_gateway_loop():
                                 f"Skipped Best Buy DM (manual unwinnable): {title[:60]}", "discord")
                             dm_user = None  # short-circuit the rest of the DM block
 
-                        # Per-URL mute: if any owning watchlist entry has a muted
+                        # Per-URL mute: if ANY watchlist entry has a muted
                         # retailer_url whose host matches this deal's URL host,
-                        # skip the DM. Useful when one source consistently posts
-                        # at a price that's too high to act on.
+                        # skip the DM. Match is purely host-based — we don't
+                        # gate on whether the entry is already linked to this
+                        # tracked deal, since fresh deals from a noisy source
+                        # often arrive before any linkage exists.
                         if dm_user:
                             from urllib.parse import urlparse
-                            deal_url = ""
-                            for _e in entry.get("embeds", []):
-                                _u = _e.get("url", "")
-                                if _u and not any(skip in _u for skip in [
-                                    "refractbot", "valoraio", "google.com/aclk",
-                                    "google.com/url", "gclid=",
-                                ]):
-                                    deal_url = _u
-                                    break
+                            import re as _re
                             def _bare_host(u: str) -> str:
                                 h = urlparse(u).netloc.lower()
                                 return h[4:] if h.startswith("www.") else h
-                            deal_host = _bare_host(deal_url) if deal_url else ""
-                            if deal_host:
+                            # Collect every URL that might represent the deal:
+                            # embed.url, the message content text, and embed
+                            # description fields (some bots stash the real URL
+                            # there). Skip known tracker/wrapper hosts.
+                            candidate_urls: list[str] = []
+                            for _e in entry.get("embeds", []):
+                                _u = _e.get("url", "")
+                                if _u: candidate_urls.append(_u)
+                                desc = _e.get("description", "")
+                                if desc:
+                                    candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', desc))
+                                for _f in _e.get("fields", []):
+                                    fv = _f.get("value", "")
+                                    if fv:
+                                        candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', fv))
+                            content = entry.get("content", "")
+                            if content:
+                                candidate_urls.extend(_re.findall(r'https?://[^\s)<>"\']+', content))
+                            skip_hosts = {"refractbot.com", "valoraio.com", "google.com",
+                                          "discord.com", "discord.gg", "discordapp.com"}
+                            deal_hosts: set[str] = set()
+                            for _u in candidate_urls:
+                                h = _bare_host(_u)
+                                if h and h not in skip_hosts and not any(s in _u for s in [
+                                    "/aclk", "/url?", "gclid=",
+                                ]):
+                                    deal_hosts.add(h)
+                            if deal_hosts:
                                 muted_match = None
                                 for _hub in product_hub.entries:
-                                    if tracked.id not in (_hub.deal_ids or []):
-                                        continue
                                     for _rl in (_hub.retailer_urls or []):
                                         if not _rl.muted: continue
                                         rl_host = _bare_host(_rl.url)
-                                        if rl_host and rl_host == deal_host:
-                                            muted_match = (_hub.name, _rl.retailer)
+                                        if rl_host and rl_host in deal_hosts:
+                                            muted_match = (_hub.name, _rl.retailer, rl_host)
                                             break
                                     if muted_match: break
                                 if muted_match:
                                     await app_state.log("info",
-                                        f"Skipped DM ({muted_match[1]} muted on '{muted_match[0]}'): {title[:60]}",
+                                        f"Skipped DM ({muted_match[1]} muted at {muted_match[2]} on '{muted_match[0]}'): {title[:60]}",
                                         "discord")
                                     dm_user = None
                         price = entry.get("price")
