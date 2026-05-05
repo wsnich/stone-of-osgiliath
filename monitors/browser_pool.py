@@ -78,6 +78,7 @@ class PersistentBrowser:
         self.ctx = None
         self.lock = asyncio.Lock()      # serialize ATC ops on this context
         self.visible = False             # current on/off-screen state
+        self.session_path = None        # Path to storage_state JSON for this account
         # Pre-warmed product tabs keyed by identifier (ASIN/SKU/ItemID).
         # When a deal hits, we can grab an already-loaded page instead of
         # paying the navigation cost again.
@@ -99,6 +100,7 @@ class PersistentBrowser:
                 return False
 
         session_path = session_path_for(account.id)
+        self.session_path = session_path
         if not session_path.exists():
             log.info(f"[{account.name}] no saved session — skipping persistent launch")
             return False
@@ -248,6 +250,21 @@ class PersistentBrowser:
         except Exception:
             return None
 
+    async def save_session(self) -> bool:
+        """Write the live context's storage_state (cookies, localStorage)
+        back to the session JSON on disk. Without this, manual logins inside
+        the pool browser are lost on app restart — the next launch reloads
+        the stale cookies that were on disk before the user signed in."""
+        if not self.ctx or not self.session_path:
+            return False
+        try:
+            await self.ctx.storage_state(path=str(self.session_path))
+            log.info(f"[{self.account_id}] session saved ({self.session_path.name})")
+            return True
+        except Exception as e:
+            log.warning(f"[{self.account_id}] save_session failed: {e}")
+            return False
+
     async def show_window(self) -> bool:
         """Pool browsers are now always visible — no off-screen mode. Kept
         as a no-op so existing callers don't break."""
@@ -341,6 +358,17 @@ class BrowserPool:
                 log.debug(f"[{aid}] refresh_warmed_tabs failed: {e}")
                 results[aid] = 0
         return results
+
+    async def save_all_sessions(self) -> int:
+        """Write storage_state to disk for every active handle. Returns count
+        of handles that successfully saved."""
+        n = 0
+        for aid, h in list(self._handles.items()):
+            if not h.is_alive():
+                continue
+            if await h.save_session():
+                n += 1
+        return n
 
 
 # Module-level singleton — same pattern as account_manager

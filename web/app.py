@@ -1125,15 +1125,40 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(25 * 60)
     _warmed_tab_task = asyncio.create_task(_warmed_tab_refresher())
 
+    async def _session_persister():
+        """Periodically write each pool browser's storage_state back to disk.
+        Without this, manual logins inside the pool browsers are lost on app
+        restart — the next launch reloads the on-disk file from before login.
+        Save every 10 min and on shutdown."""
+        await asyncio.sleep(10 * 60)
+        while app_state.monitor_running:
+            try:
+                n = await browser_pool.save_all_sessions()
+                if n:
+                    log.info(f"pool sessions persisted: {n} accounts")
+            except Exception as e:
+                log.warning(f"session persist failed: {e}")
+            await asyncio.sleep(10 * 60)
+    _session_task = asyncio.create_task(_session_persister())
+
     yield
     app_state.save_to_disk()
     deal_tracker.save_to_disk()
     product_hub.save_to_disk()
+    # Save pool sessions before stopping browsers — otherwise any manual logins
+    # done since startup are lost.
+    try:
+        n = await browser_pool.save_all_sessions()
+        if n:
+            log.info(f"shutdown: persisted {n} pool sessions")
+    except Exception as e:
+        log.warning(f"shutdown session save failed: {e}")
     app_state.monitor_running = False
-    _warmed_tab_task.cancel()
-    try: await _warmed_tab_task
-    except asyncio.CancelledError: pass
-    except Exception: pass
+    for t in (_warmed_tab_task, _session_task):
+        t.cancel()
+        try: await t
+        except asyncio.CancelledError: pass
+        except Exception: pass
     tasks_to_cancel = [t for t in (app_state._monitor_task, reddit_task, discord_task, research_task, app_state._bandwidth_task) if t]
     for t in tasks_to_cancel:
         t.cancel()
@@ -3054,6 +3079,13 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                 # Update the record with the actual success state
                 if result.get("success"):
                     _atc_record_fire(account_id, pid, success=True)
+                    # Persist the pool's storage_state immediately after a
+                    # successful interaction so any manual login the user did
+                    # in the pool browser survives a restart.
+                    pool_h = browser_pool.get(acc.id)
+                    if pool_h:
+                        try: await pool_h.save_session()
+                        except Exception: pass
 
                 # If Amazon's secure-checkout page told us this account hit the
                 # per-customer purchase limit, lock auto-fire on this acc+ASIN
@@ -3433,6 +3465,21 @@ async def _close_open_account_browser(account_id: str) -> bool:
         "data": {"account_id": account_id, "open": False},
     })
     return True
+
+
+@app.post("/api/accounts/{account_id}/save-session")
+async def save_account_session(account_id: str):
+    """Force-save the pool browser's storage_state to disk for this account.
+    Call after manually logging in inside the pool browser to make sure the
+    cookies persist across app restart."""
+    acc = account_manager.find(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    handle = browser_pool.get(account_id)
+    if not handle:
+        raise HTTPException(status_code=400, detail="No persistent browser running for this account")
+    ok = await handle.save_session()
+    return {"saved": ok, "message": "Session saved" if ok else "Save failed (see logs)"}
 
 
 @app.post("/api/accounts/{account_id}/toggle-browser")
