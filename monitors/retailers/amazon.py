@@ -198,6 +198,31 @@ def url_from_asin(asin: str) -> str:
     return f"https://www.amazon.com/dp/{asin}?th=1&psc=1"
 
 
+async def _detect_amazon_block_states(page) -> dict:
+    """Inspect the current Amazon page (cart or secure-checkout) for the three
+    notices that mean we cannot complete a buy:
+
+      purchase_limit:        per-customer 24h lockout (either page)
+      seller_qty_limit_met:  per-seller quantity limit hit (typically cart)
+      no_longer_avail:       stock vanished between ATC and checkout
+
+    All three are detected by case-insensitive substring on body innerText."""
+    try:
+        return await page.evaluate(r"""() => {
+            const t = (document.body.innerText || '').toLowerCase();
+            return {
+                purchase_limit: t.includes("you've reached the purchase limit") ||
+                                t.includes("you have reached the purchase limit") ||
+                                t.includes("reached the purchase limit"),
+                seller_qty_limit_met: t.includes("quantity limit met for this seller"),
+                no_longer_avail: t.includes("the quantity you requested is no longer available") ||
+                                 t.includes("we updated your quantity to the maximum available"),
+            };
+        }""") or {}
+    except Exception:
+        return {}
+
+
 async def _do_keep_open(page, success_result: dict, target_qty: int) -> dict:
     """Navigate to cart, click Proceed to Checkout to secure inventory, leave
     the browser open at the checkout page. Returns the success result with the
@@ -206,67 +231,57 @@ async def _do_keep_open(page, success_result: dict, target_qty: int) -> dict:
     qty_str = f" qty={target_qty}" if target_qty > 1 else ""
     cart_str = f" (cart={cart_count})" if cart_count is not None else ""
     proceeded = False
+    purchase_limited = False
+    oos_at_checkout  = False
+    blocked_at_cart  = False  # cart page itself shows a blocking notice — don't bother clicking Proceed
     try:
         # If we're already on the cart page (URL-based ATC lands here), skip the goto
         if "/cart/" not in page.url and "/gp/cart" not in page.url:
             await page.goto("https://www.amazon.com/gp/cart/view.html",
                             timeout=20000, wait_until="commit")
-        proceed_selectors = [
-            "input[name='proceedToRetailCheckout']",
-            "input[value='Proceed to checkout']",
-            "[data-feature-id='proceed-to-checkout-action'] input",
-            "[data-feature-id='proceed-to-checkout-action'] button",
-            "a[href*='/gp/buy/spc/handlers/']",
-        ]
-        for sel in proceed_selectors:
-            try:
-                btn = page.locator(sel).first
-                await btn.wait_for(state="visible", timeout=4000)
-                await btn.click()
-                proceeded = True
-                break
-            except Exception:
-                continue
-        if proceeded:
-            # Wait for the checkout page handoff (commit returns fast)
-            try:
-                await page.wait_for_load_state("commit", timeout=8000)
-            except Exception:
-                pass
+        # Pre-flight: cart page may already show a blocking notice. Don't waste
+        # a click on Proceed to Checkout if we know it'll fail.
+        cart_diag = await _detect_amazon_block_states(page)
+        if cart_diag.get("purchase_limit") or cart_diag.get("seller_qty_limit_met"):
+            blocked_at_cart = True
+            purchase_limited = True
+        if not blocked_at_cart:
+            proceed_selectors = [
+                "input[name='proceedToRetailCheckout']",
+                "input[value='Proceed to checkout']",
+                "[data-feature-id='proceed-to-checkout-action'] input",
+                "[data-feature-id='proceed-to-checkout-action'] button",
+                "a[href*='/gp/buy/spc/handlers/']",
+            ]
+            for sel in proceed_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    await btn.wait_for(state="visible", timeout=4000)
+                    await btn.click()
+                    proceeded = True
+                    break
+                except Exception:
+                    continue
+            if proceeded:
+                try:
+                    await page.wait_for_load_state("commit", timeout=8000)
+                except Exception:
+                    pass
     except Exception:
         pass
 
-    # Inspect the secure checkout page for two distinct error states Amazon
-    # surfaces when a single-item order can't proceed:
-    #   purchase_limited — user has hit the per-customer purchase limit; no
-    #     more of this item can be bought from this account for the lock
-    #     period (typically 24h). Recoverable only by waiting.
-    #   oos_at_checkout — quantity is 0 with the "no longer available" notice
-    #     but no purchase-limit notice. Means stock vanished between ATC and
-    #     checkout — can retry on a future restock.
-    purchase_limited = False
-    oos_at_checkout  = False
-    if proceeded:
-        try:
-            diag = await page.evaluate(r"""() => {
-                const t = (document.body.innerText || '').toLowerCase();
-                return {
-                    purchase_limit: t.includes("you've reached the purchase limit") ||
-                                    t.includes("you have reached the purchase limit") ||
-                                    t.includes("reached the purchase limit"),
-                    no_longer_avail: t.includes("the quantity you requested is no longer available") ||
-                                     t.includes("we updated your quantity to the maximum available"),
-                };
-            }""")
-            if isinstance(diag, dict):
-                purchase_limited = bool(diag.get("purchase_limit"))
-                if diag.get("no_longer_avail") and not purchase_limited:
-                    oos_at_checkout = True
-        except Exception:
-            pass
+    # Re-inspect the destination page (secure-checkout if we proceeded, cart if
+    # we didn't). All three signals can also appear post-Proceed.
+    if not blocked_at_cart:
+        diag = await _detect_amazon_block_states(page)
+        if diag.get("purchase_limit") or diag.get("seller_qty_limit_met"):
+            purchase_limited = True
+        elif diag.get("no_longer_avail"):
+            oos_at_checkout = True
 
     if purchase_limited:
-        msg = f"Purchase limit reached — Amazon time-locked this account from buying more (cart had {cart_count})"
+        where = "at cart" if blocked_at_cart else "at checkout"
+        msg = f"Purchase limit reached {where} — Amazon time-locked this account from buying more (cart had {cart_count})"
     elif oos_at_checkout:
         msg = f"Out of stock at checkout — added but inventory vanished before checkout could lock it"
     elif proceeded:
