@@ -29,10 +29,11 @@ from monitors.account_manager import Account, session_path_for
 
 log = logging.getLogger("browser_pool")
 
-# Off-screen position. Negative coordinates put the window outside any monitor.
-# When ATC needs the user's eyes, we move to (100, 100) on the primary screen.
-_OFFSCREEN_X, _OFFSCREEN_Y = -9000, -9000
-_ONSCREEN_X,  _ONSCREEN_Y  = 100, 100
+# Pool browsers launch at the default Chrome position (visible from the start).
+# The previous off-screen-then-surface design proved unreliable on Windows 11:
+# CDP setWindowBounds didn't always change Z-order, the topmost-then-not trick
+# was finicky, and dead pages required Win32 fallbacks. Simpler to just keep
+# them visible — user can tile/minimize manually if they want them out of the way.
 _WINDOW_WIDTH, _WINDOW_HEIGHT = 1280, 900
 
 # Init script injected into every page in the pool. Replaces the WebAuthn
@@ -63,7 +64,6 @@ _BROWSER_ARGS_BASE = [
     # Suppress Windows Hello PIN prompts during retailer sign-in. Targeted set
     # — broader --disable-features values are detectable by anti-bot fingerprinters.
     "--disable-features=WebAuthenticationConditionalUI,PasswordManagerOnboarding,PasswordCheck",
-    f"--window-position={_OFFSCREEN_X},{_OFFSCREEN_Y}",
     f"--window-size={_WINDOW_WIDTH},{_WINDOW_HEIGHT}",
 ]
 
@@ -248,130 +248,16 @@ class PersistentBrowser:
         except Exception:
             return None
 
-    def _win32_force_foreground(self) -> bool:
-        """Windows-only: enumerate top-level windows owned by the browser
-        process and pull them to the top of the Z-order. CDP setWindowBounds
-        moves the window but does not change Z-order, so on Windows 11 the
-        pool window sits behind the user's IDE / browser and stays invisible."""
-        import sys
-        if not sys.platform.startswith("win"):
-            return True   # treat as success on non-Windows
-        try:
-            import ctypes
-            from ctypes import wintypes as wt
-        except Exception:
-            return False
-        proc = self.browser.process() if self.browser else None
-        target_pid = proc.pid if proc else None
-        if not target_pid:
-            return False
-        user32 = ctypes.windll.user32
-        SWP_NOMOVE     = 0x0002
-        SWP_NOSIZE     = 0x0001
-        SWP_NOACTIVATE = 0x0010
-        SWP_SHOWWINDOW = 0x0040
-        HWND_TOPMOST    = -1
-        HWND_NOTOPMOST  = -2
-        SW_RESTORE = 9
-        # Chromium spawns child renderer processes — only the parent has the
-        # visible browser window. We match by pid OR by parent_pid via a
-        # quick toolhelp32 walk; simpler is just to match windows whose owning
-        # pid is target_pid (the launched browser) — that's the main window.
-        matched: list = []
-        @ctypes.WINFUNCTYPE(ctypes.c_bool, wt.HWND, wt.LPARAM)
-        def _enum_proc(hwnd, _):
-            pid = wt.DWORD()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            if pid.value == target_pid and user32.IsWindowVisible(hwnd):
-                matched.append(hwnd)
-            return True
-        try:
-            user32.EnumWindows(_enum_proc, 0)
-        except Exception as e:
-            log.warning(f"EnumWindows failed: {e}")
-            return False
-        if not matched:
-            log.warning(f"[{self.account_id}] no Win32 window found for pid {target_pid}")
-            return False
-        for hwnd in matched:
-            try:
-                user32.ShowWindow(hwnd, SW_RESTORE)
-                # Topmost-then-nottopmost trick: brings window to top of
-                # Z-order without permanently pinning it on top.
-                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE)
-                user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-            except Exception as e:
-                log.warning(f"SetWindowPos failed for hwnd {hwnd}: {e}")
+    async def show_window(self) -> bool:
+        """Pool browsers are now always visible — no off-screen mode. Kept
+        as a no-op so existing callers don't break."""
+        self.visible = True
         return True
 
-    async def _send_cdp_window_bounds(self, x: int, y: int,
-                                       *, force_visible: bool = False) -> bool:
-        """Move the browser window via Chrome DevTools Protocol.
-
-        force_visible: on Windows, a window at extreme negative coords can
-        end up in a state where setWindowBounds with state=normal is a no-op.
-        Cycling through minimized → normal forces a real state transition
-        that brings the window onscreen.
-        """
-        if not self.ctx:
-            return False
-        try:
-            pages = self.ctx.pages
-            page = pages[0] if pages else await self.ctx.new_page()
-            cdp = await self.ctx.new_cdp_session(page)
-            target = await cdp.send("Browser.getWindowForTarget")
-            window_id = target.get("windowId")
-            if window_id is None:
-                log.warning("CDP move: getWindowForTarget returned no windowId")
-                return False
-            if force_visible:
-                # State transition trick: minimize first, then set bounds normal.
-                try:
-                    await cdp.send("Browser.setWindowBounds", {
-                        "windowId": window_id,
-                        "bounds": {"windowState": "minimized"},
-                    })
-                except Exception:
-                    pass
-            await cdp.send("Browser.setWindowBounds", {
-                "windowId": window_id,
-                "bounds": {"left": x, "top": y,
-                           "width": _WINDOW_WIDTH, "height": _WINDOW_HEIGHT,
-                           "windowState": "normal"},
-            })
-            if force_visible:
-                # Pull the page tab to foreground so it gets focus
-                try: await page.bring_to_front()
-                except Exception: pass
-            try: await cdp.detach()
-            except Exception: pass
-            return True
-        except Exception as e:
-            log.warning(f"CDP move ({x},{y}) failed: {e}")
-            return False
-
-    async def show_window(self) -> bool:
-        ok = await self._send_cdp_window_bounds(_ONSCREEN_X, _ONSCREEN_Y, force_visible=True)
-        # CDP only changes window position/state — it does NOT change Z-order.
-        # Pull the OS window to the top of the Z-order via Win32 so it isn't
-        # buried behind the user's other apps.
-        try:
-            self._win32_force_foreground()
-        except Exception as e:
-            log.warning(f"win32 foreground failed: {e}")
-        if ok:
-            self.visible = True
-        else:
-            log.warning(f"[{self.account_id}] show_window: CDP did not surface — window may stay off-screen")
-        return ok
-
     async def hide_window(self) -> bool:
-        ok = await self._send_cdp_window_bounds(_OFFSCREEN_X, _OFFSCREEN_Y)
-        if ok:
-            self.visible = False
-        return ok
+        """No-op: pool browsers stay visible. Kept for API compat."""
+        self.visible = True
+        return False
 
     def is_alive(self) -> bool:
         if not self.ctx:

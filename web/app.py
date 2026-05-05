@@ -2733,6 +2733,29 @@ def _is_duplicate_recent_alert(entry: dict) -> Optional[str]:
 _atc_fire_history: deque = deque(maxlen=2000)
 _AUTO_ATC_COOLDOWN_MIN = 30   # don't re-fire same account+ASIN within this window
 _AUTO_ATC_DAILY_CAP    = 1    # successful ATCs per account+ASIN per UTC day
+_PURCHASE_LIMIT_HOURS  = 24   # how long Amazon's per-account purchase limit typically lasts
+
+# Per (account_id, asin) timestamp until which auto-fire is suppressed because
+# Amazon flagged the account as having reached the purchase limit at checkout.
+# This is a much stronger signal than the 30-min cooldown — Amazon will not let
+# this account buy more of this item until the lock expires.
+_purchase_limit_locks: dict[tuple[str, str], datetime] = {}
+
+
+def _record_purchase_limit_lock(account_id: str, asin: str, hours: float = _PURCHASE_LIMIT_HOURS) -> None:
+    until = datetime.now() + timedelta(hours=hours)
+    _purchase_limit_locks[(account_id, asin)] = until
+
+
+def _purchase_limit_active(account_id: str, asin: str) -> Optional[datetime]:
+    """Return the lock expiry if this account+ASIN is currently purchase-limited."""
+    until = _purchase_limit_locks.get((account_id, asin))
+    if not until:
+        return None
+    if until <= datetime.now():
+        _purchase_limit_locks.pop((account_id, asin), None)
+        return None
+    return until
 
 
 async def _atc_can_fire(account_id: str, asin: str) -> tuple[bool, str]:
@@ -2742,6 +2765,12 @@ async def _atc_can_fire(account_id: str, asin: str) -> tuple[bool, str]:
     not just successful ATCs — so failed checkouts don't burn the cap and
     a deal that came back can retry.
     """
+    # Purchase-limit lock: Amazon told us this account can't buy more of this
+    # item for some hours. Skip fast — no point even opening a browser.
+    plock = _purchase_limit_active(account_id, asin)
+    if plock:
+        delta_h = (plock - datetime.now()).total_seconds() / 3600
+        return False, f"purchase-limit lock active (~{delta_h:.1f}h remaining)"
     if not asin:
         return False, "no asin"
     now = datetime.now()
@@ -2997,11 +3026,20 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                 if result.get("success"):
                     _atc_record_fire(account_id, pid, success=True)
 
+                # If Amazon's secure-checkout page told us this account hit the
+                # per-customer purchase limit, lock auto-fire on this acc+ASIN
+                # for 24 hours. Skips the daily-cap path because we want this to
+                # carry across days until Amazon clears the lock.
+                if result.get("purchase_limited"):
+                    _record_purchase_limit_lock(account_id, pid)
+                    await app_state.log("warn",
+                        f"[{acc.name}] purchase-limit lock recorded for {pid} — auto-fire suppressed for {_PURCHASE_LIMIT_HOURS}h",
+                        "accounts")
+
                 # On successful ATC: the pool/cold ATC already navigates to the
-                # checkout page (keep_open=True) and surfaces the off-screen
-                # browser via show_window. Only spawn the secondary auto-confirm
-                # browser if the user has set a max_total cap on this watchlist
-                # item — that runs full headless checkout up to Place Your Order.
+                # checkout page (keep_open=True). Only spawn the secondary
+                # auto-confirm browser if the user has set a max_total cap —
+                # that runs full headless checkout up to Place Your Order.
                 if (result.get("success")
                         and acc.retailer in ("amazon", "walmart")
                         and entry.auto_atc_max_total is not None):

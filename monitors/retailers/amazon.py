@@ -235,12 +235,49 @@ async def _do_keep_open(page, success_result: dict, target_qty: int) -> dict:
                 pass
     except Exception:
         pass
-    msg = (f"Added to cart{qty_str}{cart_str} — checkout secured, browser left open"
-           if proceeded else
-           f"Added to cart{qty_str}{cart_str} — at cart page (could not auto-click Proceed)")
+
+    # Inspect the secure checkout page for two distinct error states Amazon
+    # surfaces when a single-item order can't proceed:
+    #   purchase_limited — user has hit the per-customer purchase limit; no
+    #     more of this item can be bought from this account for the lock
+    #     period (typically 24h). Recoverable only by waiting.
+    #   oos_at_checkout — quantity is 0 with the "no longer available" notice
+    #     but no purchase-limit notice. Means stock vanished between ATC and
+    #     checkout — can retry on a future restock.
+    purchase_limited = False
+    oos_at_checkout  = False
+    if proceeded:
+        try:
+            diag = await page.evaluate(r"""() => {
+                const t = (document.body.innerText || '').toLowerCase();
+                return {
+                    purchase_limit: t.includes("you've reached the purchase limit") ||
+                                    t.includes("you have reached the purchase limit") ||
+                                    t.includes("reached the purchase limit"),
+                    no_longer_avail: t.includes("the quantity you requested is no longer available") ||
+                                     t.includes("we updated your quantity to the maximum available"),
+                };
+            }""")
+            if isinstance(diag, dict):
+                purchase_limited = bool(diag.get("purchase_limit"))
+                if diag.get("no_longer_avail") and not purchase_limited:
+                    oos_at_checkout = True
+        except Exception:
+            pass
+
+    if purchase_limited:
+        msg = f"Purchase limit reached — Amazon time-locked this account from buying more (cart had {cart_count})"
+    elif oos_at_checkout:
+        msg = f"Out of stock at checkout — added but inventory vanished before checkout could lock it"
+    elif proceeded:
+        msg = f"Added to cart{qty_str}{cart_str} — checkout secured, browser left open"
+    else:
+        msg = f"Added to cart{qty_str}{cart_str} — at cart page (could not auto-click Proceed)"
     return {"success": True, "message": msg,
             "cart_count": cart_count, "quantity_added": target_qty,
             "browser_left_open": True, "proceeded_to_checkout": proceeded,
+            "purchase_limited": purchase_limited,
+            "oos_at_checkout": oos_at_checkout,
             "via": success_result.get("via", "click")}
 
 
