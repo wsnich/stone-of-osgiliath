@@ -199,14 +199,16 @@ def url_from_asin(asin: str) -> str:
 
 
 async def _detect_amazon_block_states(page) -> dict:
-    """Inspect the current Amazon page (cart or secure-checkout) for the three
+    """Inspect the current Amazon page (cart or secure-checkout) for the
     notices that mean we cannot complete a buy:
 
       purchase_limit:        per-customer 24h lockout (either page)
       seller_qty_limit_met:  per-seller quantity limit hit (typically cart)
       no_longer_avail:       stock vanished between ATC and checkout
+      cart_is_empty:         landed on cart page but it's empty (URL ATC silently
+                             rejected, or the item disappeared)
 
-    All three are detected by case-insensitive substring on body innerText."""
+    All detected by case-insensitive substring on body innerText."""
     try:
         return await page.evaluate(r"""() => {
             const t = (document.body.innerText || '').toLowerCase();
@@ -217,6 +219,13 @@ async def _detect_amazon_block_states(page) -> dict:
                 seller_qty_limit_met: t.includes("quantity limit met for this seller"),
                 no_longer_avail: t.includes("the quantity you requested is no longer available") ||
                                  t.includes("we updated your quantity to the maximum available"),
+                // The empty-cart page is the standard "Your Amazon Cart is empty"
+                // hero. The ALSO-shows variant after a silent URL-ATC reject is
+                // "no, thank you. please take me back to amazon.com" / "go to cart".
+                cart_is_empty: t.includes("your amazon cart is empty") ||
+                               t.includes("your shopping cart is empty") ||
+                               (t.includes("no, thank you") &&
+                                t.includes("take me back to amazon")),
             };
         }""") or {}
     except Exception:
@@ -233,6 +242,7 @@ async def _do_keep_open(page, success_result: dict, target_qty: int) -> dict:
     proceeded = False
     purchase_limited = False
     oos_at_checkout  = False
+    cart_is_empty    = False
     blocked_at_cart  = False  # cart page itself shows a blocking notice — don't bother clicking Proceed
     try:
         # If we're already on the cart page (URL-based ATC lands here), skip the goto
@@ -245,6 +255,9 @@ async def _do_keep_open(page, success_result: dict, target_qty: int) -> dict:
         if cart_diag.get("purchase_limit") or cart_diag.get("seller_qty_limit_met"):
             blocked_at_cart = True
             purchase_limited = True
+        if cart_diag.get("cart_is_empty"):
+            cart_is_empty = True
+            blocked_at_cart = True
         if not blocked_at_cart:
             proceed_selectors = [
                 "input[name='proceedToRetailCheckout']",
@@ -279,7 +292,15 @@ async def _do_keep_open(page, success_result: dict, target_qty: int) -> dict:
         elif diag.get("no_longer_avail"):
             oos_at_checkout = True
 
-    if purchase_limited:
+    # Empty cart trumps every other state — if the cart is empty, the upstream
+    # ATC (URL or click) didn't actually add anything despite reporting success.
+    # Return success=False so the dispatcher logs it correctly and so the
+    # purchase_limit / oos paths don't fire on a misleading state.
+    overall_success = True
+    if cart_is_empty:
+        overall_success = False
+        msg = "Cart is empty — Amazon silently rejected ATC (item not addable from this account)"
+    elif purchase_limited:
         where = "at cart" if blocked_at_cart else "at checkout"
         msg = f"Purchase limit reached {where} — Amazon time-locked this account from buying more (cart had {cart_count})"
     elif oos_at_checkout:
@@ -288,11 +309,13 @@ async def _do_keep_open(page, success_result: dict, target_qty: int) -> dict:
         msg = f"Added to cart{qty_str}{cart_str} — checkout secured, browser left open"
     else:
         msg = f"Added to cart{qty_str}{cart_str} — at cart page (could not auto-click Proceed)"
-    return {"success": True, "message": msg,
+    return {"success": overall_success, "message": msg,
             "cart_count": cart_count, "quantity_added": target_qty,
-            "browser_left_open": True, "proceeded_to_checkout": proceeded,
+            "browser_left_open": overall_success or purchase_limited,
+            "proceeded_to_checkout": proceeded,
             "purchase_limited": purchase_limited,
             "oos_at_checkout": oos_at_checkout,
+            "cart_is_empty": cart_is_empty,
             "via": success_result.get("via", "click")}
 
 
@@ -332,13 +355,7 @@ async def _atc_via_url(page, asin: str, quantity: int) -> dict:
         pass
 
     final_url = page.url
-    if "/cart/" in final_url or "/gp/cart" in final_url:
-        if cart_count is None or cart_count > 0:
-            qty_str = f" qty={quantity}" if quantity > 1 else ""
-            cart_str = f" (cart={cart_count})" if cart_count is not None else ""
-            return {"success": True, "fallback": False,
-                    "message": f"Added to cart{qty_str}{cart_str}",
-                    "cart_count": cart_count, "quantity_added": quantity, "via": "url"}
+    on_cart_url = ("/cart/" in final_url or "/gp/cart" in final_url)
 
     # Did the URL handler land us on a page that shows a hard-block notice?
     # If so, no point retrying via the click flow.
@@ -347,6 +364,24 @@ async def _atc_via_url(page, asin: str, quantity: int) -> dict:
         return {"success": False, "fallback": False, "purchase_limited": True,
                 "message": "Quantity limit met for this seller — Amazon time-locked this account from buying more",
                 "cart_count": None}
+
+    # Empty-cart redirect = silent reject. Examples:
+    #   "Your Amazon Cart is empty"
+    #   The post-add interstitial: "No, thank you. Please take me back to
+    #   amazon.com" with "Go to Cart" — Amazon refused the add and is asking
+    #   the user to bail. No point falling through to the click flow; the
+    #   item is fundamentally not addable from this account.
+    if block.get("cart_is_empty") or (on_cart_url and cart_count == 0):
+        return {"success": False, "fallback": False,
+                "message": "Amazon silently rejected ATC — cart is empty, item not addable from this account",
+                "cart_count": 0}
+
+    if on_cart_url and (cart_count is None or cart_count > 0):
+        qty_str = f" qty={quantity}" if quantity > 1 else ""
+        cart_str = f" (cart={cart_count})" if cart_count is not None else ""
+        return {"success": True, "fallback": False,
+                "message": f"Added to cart{qty_str}{cart_str}",
+                "cart_count": cart_count, "quantity_added": quantity, "via": "url"}
 
     # Detect explicit unavailable / OOS pages so we don't waste time on click fallback
     try:
