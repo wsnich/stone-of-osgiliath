@@ -330,14 +330,31 @@ async def _atc_via_url(page, asin: str, quantity: int) -> dict:
         should retry with the click-based flow.
     """
     cart_add_url = f"https://www.amazon.com/gp/aws/cart/add.html?ASIN.1={asin}&Quantity.1={quantity}"
+    # Send a referer pointing at the product page so the request looks like
+    # it came from an in-page ATC click. Plain referer-less hits on the URL
+    # handler are more often silently rejected by Amazon's anti-bot.
+    product_url = f"https://www.amazon.com/dp/{asin}"
     try:
-        await page.goto(cart_add_url, timeout=15000, wait_until="commit")
+        await page.goto(cart_add_url, timeout=15000, wait_until="commit",
+                        referer=product_url)
     except Exception as e:
         return {"success": False, "fallback": True,
                 "message": f"URL ATC navigation failed: {e}"}
 
-    # Brief pause for Amazon's server-side redirect to land us on the cart
-    await asyncio.sleep(0.4)
+    # Wait for the page to actually settle instead of sleeping a fixed 0.4s.
+    # On most happy paths the redirect to /cart fires within ~150ms — this
+    # short-circuits as soon as we know where we landed.
+    try:
+        await page.wait_for_function(
+            r"""() => {
+                const p = location.pathname || '';
+                if (p.includes('/cart') || p.includes('/ap/signin')) return true;
+                return (document.body && (document.body.innerText || '').length > 50);
+            }""",
+            timeout=1200,
+        )
+    except Exception:
+        pass
     if "/ap/signin" in page.url:
         return {"success": False, "fallback": False,
                 "message": "Session expired — re-login this account"}
@@ -365,16 +382,15 @@ async def _atc_via_url(page, asin: str, quantity: int) -> dict:
                 "message": "Quantity limit met for this seller — Amazon time-locked this account from buying more",
                 "cart_count": None}
 
-    # Empty-cart redirect = silent reject. Examples:
-    #   "Your Amazon Cart is empty"
-    #   The post-add interstitial: "No, thank you. Please take me back to
-    #   amazon.com" with "Go to Cart" — Amazon refused the add and is asking
-    #   the user to bail. No point falling through to the click flow; the
-    #   item is fundamentally not addable from this account.
+    # Empty-cart redirect = silent reject from the URL handler. Most common
+    # causes: bot-detection on /gp/aws/cart/add.html, or a stale referer that
+    # Amazon didn't trust. Fall back to the click flow — clicking the actual
+    # ATC button on the product page is more authentic and often succeeds
+    # where the URL handler was rejected.
     if block.get("cart_is_empty") or (on_cart_url and cart_count == 0):
-        return {"success": False, "fallback": False,
-                "message": "Amazon silently rejected ATC — cart is empty, item not addable from this account",
-                "cart_count": 0}
+        return {"success": False, "fallback": True,
+                "message": "URL ATC silently rejected (empty cart) — retrying via product page click",
+                "cart_count": 0, "cart_is_empty": True}
 
     if on_cart_url and (cart_count is None or cart_count > 0):
         qty_str = f" qty={quantity}" if quantity > 1 else ""
