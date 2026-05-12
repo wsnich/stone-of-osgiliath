@@ -3096,6 +3096,16 @@ async def _maybe_auto_fire_atc(tracked_deal, source_msg: dict) -> None:
                     await app_state.log("warn",
                         f"[{acc.name}] purchase-limit lock recorded for {pid} — auto-fire suppressed for {_PURCHASE_LIMIT_HOURS}h",
                         "accounts")
+                # Silent-reject lock: ATC ran (clicked) but cart didn't move.
+                # Could be a real per-customer purchase limit Amazon enforces
+                # silently, or a temporary anti-bot block. Lock for 2h — short
+                # enough to recover quickly if it was temporary, long enough
+                # to stop burning attempts on a definitively locked SKU.
+                elif result.get("silent_reject"):
+                    _record_purchase_limit_lock(account_id, pid, hours=2)
+                    await app_state.log("warn",
+                        f"[{acc.name}] silent-reject lock recorded for {pid} — auto-fire suppressed for 2h",
+                        "accounts")
 
                 # On successful ATC: the pool/cold ATC already navigates to the
                 # checkout page (keep_open=True). Only spawn the secondary

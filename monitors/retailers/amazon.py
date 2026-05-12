@@ -219,11 +219,14 @@ async def _detect_amazon_block_states(page) -> dict:
                 seller_qty_limit_met: t.includes("quantity limit met for this seller"),
                 no_longer_avail: t.includes("the quantity you requested is no longer available") ||
                                  t.includes("we updated your quantity to the maximum available"),
-                // The empty-cart page is the standard "Your Amazon Cart is empty"
-                // hero. The ALSO-shows variant after a silent URL-ATC reject is
-                // "no, thank you. please take me back to amazon.com" / "go to cart".
+                // Empty-cart page variants:
+                //   "Your Amazon Cart is empty" — classic
+                //   "Cart is empty"             — newer heading-only variant
+                //   "no, thank you. please take me back to amazon.com" — post-reject interstitial
                 cart_is_empty: t.includes("your amazon cart is empty") ||
                                t.includes("your shopping cart is empty") ||
+                               (t.includes("cart is empty") &&
+                                !t.includes("is not empty")) ||
                                (t.includes("no, thank you") &&
                                 t.includes("take me back to amazon")),
             };
@@ -431,6 +434,22 @@ async def _atc_on_page(page, url: str, quantity: int = 1,
     back to the slower product-page + click-button flow only when URL ATC
     can't determine success (multi-seller offers, variation pickers, etc.).
     """
+    # Baseline cart count — captured before any ATC attempt. If this stays
+    # unchanged across the whole flow, Amazon silently rejected the add and
+    # the dispatcher should treat it as a soft-lock signal.
+    async def _read_cart_count():
+        try:
+            v = await page.evaluate(r"""() => {
+                const el = document.querySelector('#nav-cart-count, span.nav-cart-count');
+                if (!el) return null;
+                const n = parseInt((el.textContent || '').trim(), 10);
+                return Number.isFinite(n) ? n : null;
+            }""")
+            return v if isinstance(v, int) else None
+        except Exception:
+            return None
+    initial_cart = await _read_cart_count()
+
     success = False
     try:
         # ── A) Try URL-based ATC first when we have an ASIN. Massive speedup.
@@ -615,6 +634,16 @@ async def _atc_on_page(page, url: str, quantity: int = 1,
                     success = True
         except Exception:
             pass
+
+        # Cart-count diff is the most authoritative signal. If we clicked but
+        # the count didn't go up, Amazon silently rejected — flag for the
+        # dispatcher to lock this account+ASIN.
+        if (initial_cart is not None and cart_count is not None
+                and cart_count <= initial_cart and clicked):
+            return {"success": False, "silent_reject": True, "clicked": True,
+                    "message": (f"Silent reject — clicked ATC but cart stayed at "
+                                f"{cart_count} (initial {initial_cart}). Amazon refused the add."),
+                    "cart_count": cart_count}
 
         if success:
             base_result = {
