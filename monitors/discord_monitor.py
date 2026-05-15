@@ -158,9 +158,18 @@ class DiscordMonitor:
             if blocked_match:
                 return None, {**log_entry, "action": "filtered", "reason": f"blocked retailer: {blocked_match[0]}"}
 
-        # Check keyword matches
+        # Check keyword matches. Word-boundary regex (\b) rather than raw
+        # substring so short tokens like "mtg" don't accidentally match inside
+        # arbitrary embed metadata (footer tags, related-search blocks, etc.).
+        # Multi-word keywords ("collector booster box") still work — \b is a
+        # zero-width assertion at the outer edges of the phrase.
         if keywords:
-            matched = [kw for kw in keywords if kw in full_text]
+            matched = []
+            for kw in keywords:
+                # Escape regex metachars in the keyword (hyphens, periods, etc.)
+                pat = r"\b" + re.escape(kw) + r"\b"
+                if re.search(pat, full_text):
+                    matched.append(kw)
             if not matched:
                 return None, {**log_entry, "action": "filtered", "reason": "no keyword match"}
         else:
