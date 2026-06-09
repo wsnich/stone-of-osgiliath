@@ -176,10 +176,13 @@ class DiscordMonitor:
             matched = []
 
         # Singles filter — drop posts that look like individual cards even when
-        # they match a sealed-set keyword. Sealed product names always contain
-        # "box", "bundle", "booster pack", "display", or "case"; singles never
-        # do. A 3-4 digit collector number in parens like "(0209)" is also a
-        # near-perfect singles signal.
+        # they match a sealed-set keyword. Multiple signal families:
+        #   1. Sealed-word inclusion check: if any of these phrases appear, treat
+        #      as sealed and skip the singles drop entirely.
+        #   2. Title-level singles indicators (collector numbers, treatment words)
+        #   3. Embed-content singles indicators (card-meta lines like "Card Type",
+        #      "Rarity Rare", "Power/Toughness")
+        #   4. Known singles-vendor hostnames in any URL on the post.
         if dc.get("exclude_singles", True):
             sealed_words = ("booster box", "booster pack", "booster display",
                             "collector box", "play booster", "bundle",
@@ -196,11 +199,29 @@ class DiscordMonitor:
                     re.compile(r"\bextended art\b"),
                     re.compile(r"\balternate art\b"),
                     re.compile(r"\bfoil etched\b"),
+                    # Set-code + collector number variants: MSH166, MSH-166,
+                    # STX-001, WHO-256. Three-or-four letter code, optional
+                    # dash, 1-4 digits. Matches mid-title slugs / SKU markers.
+                    re.compile(r"\b[a-z]{3,4}-?\d{1,4}\b"),
+                    # Single-card embed metadata (Refract / Moonitor render
+                    # these explicit fields):
+                    re.compile(r"\bcard type\b"),
+                    re.compile(r"\brarity\s+(rare|common|uncommon|mythic|special)\b"),
+                    re.compile(r"\bpower/toughness\b"),
+                    re.compile(r"\blegalities\b"),
                 ]
                 singles_hits = [p.pattern for p in singles_indicators if p.search(full_text)]
-                if singles_hits:
+                # Singles-vendor hosts (any URL anywhere in the post)
+                singles_hosts = ("joshscards.com", "cardkingdom.com/mtg/",
+                                 "starcitygames.com/", "channelfireball.com/products/",
+                                 "tcgplayer.com/product/")
+                host_hits = [h for h in singles_hosts if h in full_text]
+                if singles_hits or host_hits:
+                    reason_bits = []
+                    if singles_hits: reason_bits.append(f"indicators={','.join(singles_hits[:2])}")
+                    if host_hits:    reason_bits.append(f"host={host_hits[0]}")
                     return None, {**log_entry, "action": "filtered",
-                                  "reason": f"singles filter (indicators: {','.join(singles_hits[:2])})"}
+                                  "reason": f"singles filter ({'; '.join(reason_bits)})"}
 
         # Price floor filter
         min_price = dc.get("min_price", 0)
