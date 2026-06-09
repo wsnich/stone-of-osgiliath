@@ -175,6 +175,33 @@ class DiscordMonitor:
         else:
             matched = []
 
+        # Singles filter — drop posts that look like individual cards even when
+        # they match a sealed-set keyword. Sealed product names always contain
+        # "box", "bundle", "booster pack", "display", or "case"; singles never
+        # do. A 3-4 digit collector number in parens like "(0209)" is also a
+        # near-perfect singles signal.
+        if dc.get("exclude_singles", True):
+            sealed_words = ("booster box", "booster pack", "booster display",
+                            "collector box", "play booster", "bundle",
+                            "display case", "gift bundle",
+                            "starter kit", "starter deck", "commander deck",
+                            "secret lair", "booster case", "collector omega",
+                            "codex bundle", "draft booster", "premium collection")
+            has_sealed = any(w in full_text for w in sealed_words)
+            if not has_sealed:
+                singles_indicators = [
+                    re.compile(r"\(\d{3,4}\)"),                # (0209), (1456)
+                    re.compile(r"\bborderless\b"),
+                    re.compile(r"\bshowcase\b"),
+                    re.compile(r"\bextended art\b"),
+                    re.compile(r"\balternate art\b"),
+                    re.compile(r"\bfoil etched\b"),
+                ]
+                singles_hits = [p.pattern for p in singles_indicators if p.search(full_text)]
+                if singles_hits:
+                    return None, {**log_entry, "action": "filtered",
+                                  "reason": f"singles filter (indicators: {','.join(singles_hits[:2])})"}
+
         # Price floor filter
         min_price = dc.get("min_price", 0)
         if min_price and price is not None and price < min_price:
