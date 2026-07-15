@@ -184,12 +184,27 @@ class DiscordMonitor:
         #      "Rarity Rare", "Power/Toughness")
         #   4. Known singles-vendor hostnames in any URL on the post.
         if dc.get("exclude_singles", True):
+            # Product-FORMAT phrases only. This is a bypass — any hit skips the
+            # singles drop entirely — so every entry must be a sealed-packaging
+            # term that never appears inside an individual card's name. Do NOT
+            # add bare set-line words (e.g. "jumpstart"): a Jumpstart *single*
+            # would carry that word and slip through. Use the compound
+            # ("jumpstart booster") instead.
             sealed_words = ("booster box", "booster pack", "booster display",
                             "collector box", "play booster", "bundle",
                             "display case", "gift bundle",
-                            "starter kit", "starter deck", "commander deck",
+                            "starter kit", "starter deck", "starter set",
+                            "commander deck", "planeswalker deck",
+                            "challenger deck", "battle deck",
                             "secret lair", "booster case", "collector omega",
-                            "codex bundle", "draft booster", "premium collection")
+                            "codex bundle", "draft booster", "set booster",
+                            "theme booster", "jumpstart booster",
+                            "collector booster", "premium collection",
+                            "prerelease pack", "prerelease kit", "fat pack",
+                            "intro pack", "trainer box", "collection box",
+                            "booster tin", "collector tin",
+                            "build & battle", "build and battle",
+                            "two-player starter")
             has_sealed = any(w in full_text for w in sealed_words)
             if not has_sealed:
                 singles_indicators = [
